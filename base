@@ -1,0 +1,245 @@
+import json
+import os
+from datetime import datetime
+
+ARCHIVO_DB = "empresa_db.json"
+
+# --- UTILIDAD DE LIMPIEZA DE TERMINAL ---
+def limpiar_pantalla():
+    # 'nt' corresponde a Windows, de lo contrario es Linux/Mac
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+# --- 1. GESTIÓN DE PERSISTENCIA (Fuente Única de Verdad) ---
+def cargar_datos():
+    if not os.path.exists(ARCHIVO_DB):
+        return {
+            "inventario": {},
+            "clientes": {},
+            "ventas": [],
+            "caja": {"saldo_actual": 0.0, "movimientos": []}
+        }
+    with open(ARCHIVO_DB, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def guardar_datos(db):
+    with open(ARCHIVO_DB, "w", encoding="utf-8") as f:
+        json.dump(db, f, indent=4, ensure_ascii=False)
+
+def obtener_fecha():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def pausar():
+    input("\nPresiona [Enter] para continuar...")
+
+# --- 2. MÓDULO DE INVENTARIO ---
+def agregar_producto(db):
+    limpiar_pantalla()
+    print("\n--- NUEVO PRODUCTO / ACTUALIZAR STOCK ---")
+    codigo = input("Código del producto (ej. P001): ").strip().upper()
+    if codigo in db["inventario"]:
+        try:
+            cant = int(input(f"Producto existente ({db['inventario'][codigo]['nombre']}). Cantidad a sumar: "))
+            if cant > 0:
+                db["inventario"][codigo]["stock"] += cant
+                guardar_datos(db)
+                print("\nStock actualizado correctamente.")
+        except ValueError:
+            print("\nError: Ingresa un número entero válido.")
+        pausar()
+        return
+
+    nombre = input("Nombre del producto: ").strip()
+    try:
+        costo = float(input("Costo unitario de compra ($): "))
+        precio = float(input("Precio unitario de venta ($): "))
+        stock = int(input("Stock inicial: "))
+        stock_min = int(input("Stock mínimo para alerta: "))
+    except ValueError:
+        print("\nError: Valores numéricos inválidos.")
+        pausar()
+        return
+
+    db["inventario"][codigo] = {
+        "nombre": nombre,
+        "costo": costo,
+        "precio": precio,
+        "stock": stock,
+        "stock_min": stock_min
+    }
+    guardar_datos(db)
+    print(f"\nProducto '{nombre}' registrado con éxito.")
+    pausar()
+
+def ver_inventario(db):
+    limpiar_pantalla()
+    print("\n--- INVENTARIO ACTUAL ---")
+    if not db["inventario"]:
+        print("El inventario está vacío.")
+    else:
+        for cod, p in db["inventario"].items():
+            alerta = " [¡STOCK BAJO!]" if p["stock"] <= p["stock_min"] else ""
+            print(f"[{cod}] {p['nombre']} | Stock: {p['stock']} | Costo: ${p['costo']:.2f} | Venta: ${p['precio']:.2f}{alerta}")
+    pausar()
+
+# --- 3. MÓDULO DE CLIENTES (CRM Básico) ---
+def registrar_cliente(db):
+    limpiar_pantalla()
+    print("\n--- REGISTRAR CLIENTE ---")
+    id_cliente = input("Cédula / RIF / ID del cliente: ").strip()
+    if id_cliente in db["clientes"]:
+        print("\nEl cliente ya se encuentra registrado.")
+        pausar()
+        return
+    nombre = input("Nombre o Razón Social: ").strip()
+    telefono = input("Teléfono de contacto: ").strip()
+    db["clientes"][id_cliente] = {"nombre": nombre, "telefono": telefono, "compras": 0}
+    guardar_datos(db)
+    print("\nCliente registrado con éxito.")
+    pausar()
+
+# --- 4. MÓDULO DE VENTAS (POS) ---
+def registrar_venta(db):
+    limpiar_pantalla()
+    print("\n--- REGISTRAR VENTA ---")
+    if not db["inventario"]:
+        print("No hay productos en el inventario para vender.")
+        pausar()
+        return
+
+    codigo = input("Código del producto a vender: ").strip().upper()
+    if codigo not in db["inventario"]:
+        print("\nProducto no encontrado.")
+        pausar()
+        return
+
+    producto = db["inventario"][codigo]
+    try:
+        cantidad = int(input(f"Cantidad de '{producto['nombre']}' (Disponible: {producto['stock']}): "))
+        if cantidad <= 0 or cantidad > producto["stock"]:
+            print("\nError: Cantidad inválida o stock insuficiente.")
+            pausar()
+            return
+    except ValueError:
+        print("\nError: Ingresa un número entero.")
+        pausar()
+        return
+
+    id_cliente = input("ID del cliente (dejar vacío para 'Consumidor Final'): ").strip()
+    nombre_cliente = "Consumidor Final"
+    if id_cliente in db["clientes"]:
+        nombre_cliente = db["clientes"][id_cliente]["nombre"]
+        db["clientes"][id_cliente]["compras"] += 1
+
+    total_venta = cantidad * producto["precio"]
+    costo_total = cantidad * producto["costo"]
+    ganancia = total_venta - costo_total
+    fecha = obtener_fecha()
+
+    producto["stock"] -= cantidad
+    
+    db["ventas"].append({
+        "fecha": fecha,
+        "producto": producto["nombre"],
+        "cantidad": cantidad,
+        "total": total_venta,
+        "ganancia_neta": ganancia,
+        "cliente": nombre_cliente
+    })
+
+    db["caja"]["saldo_actual"] += total_venta
+    db["caja"]["movimientos"].append({
+        "fecha": fecha,
+        "tipo": "INGRESO",
+        "concepto": f"Venta {cantidad}x {producto['nombre']} ({nombre_cliente})",
+        "monto": total_venta
+    })
+
+    guardar_datos(db)
+    print(f"\nVenta procesada. Total cobrado: ${total_venta:.2f}")
+    pausar()
+
+# --- 5. MÓDULO DE CAJA Y FINANZAS ---
+def registrar_gasto(db):
+    limpiar_pantalla()
+    print("\n--- REGISTRAR GASTO / EGRESO ---")
+    concepto = input("Concepto del gasto (ej. Pago de luz, Compra mercancía): ").strip()
+    try:
+        monto = float(input("Monto del gasto ($): "))
+        if monto <= 0:
+            print("\nEl monto debe ser mayor a cero.")
+            pausar()
+            return
+    except ValueError:
+        print("\nError: Monto inválido.")
+        pausar()
+        return
+
+    db["caja"]["saldo_actual"] -= monto
+    db["caja"]["movimientos"].append({
+        "fecha": obtener_fecha(),
+        "tipo": "EGRESO",
+        "concepto": concepto,
+        "monto": -monto
+    })
+    guardar_datos(db)
+    print("\nGasto registrado en flujo de caja.")
+    pausar()
+
+# --- 6. REPORTERÍA E INDICADORES (KPIs) ---
+def ver_dashboard(db):
+    limpiar_pantalla()
+    print("\n================ DASHBOARD GERENCIAL ================")
+    total_ingresos = sum(v["total"] for v in db["ventas"])
+    ganancia_bruta = sum(v["ganancia_neta"] for v in db["ventas"])
+    total_egresos = sum(abs(m["monto"]) for m in db["caja"]["movimientos"] if m["tipo"] == "EGRESO")
+    
+    print(f"Saldo actual en Caja:       ${db['caja']['saldo_actual']:.2f}")
+    print(f"Ingresos totales por venta: ${total_ingresos:.2f}")
+    print(f"Ganancia real (Margen):     ${ganancia_bruta:.2f}")
+    print(f"Egresos operativos:         ${total_egresos:.2f}")
+    print(f"Total de ventas realizadas: {len(db['ventas'])}")
+    
+    bajo_stock = [p["nombre"] for p in db["inventario"].values() if p["stock"] <= p["stock_min"]]
+    if bajo_stock:
+        print(f"ALERTA DE REPOSICIÓN:       {', '.join(bajo_stock)}")
+    print("=====================================================")
+    pausar()
+
+# --- MENÚ PRINCIPAL ---
+def menu():
+    db = cargar_datos()
+    while True:
+        limpiar_pantalla() # Limpia la pantalla cada vez que regresa al menú principal
+        print("=== SISTEMA DE GESTIÓN EMPRESARIAL ===")
+        print("1. Registrar Venta (POS)")
+        print("2. Agregar / Actualizar Producto")
+        print("3. Ver Inventario")
+        print("4. Registrar Cliente")
+        print("5. Registrar Gasto (Egreso)")
+        print("6. Ver Dashboard (KPIs)")
+        print("7. Salir")
+        
+        opcion = input("\nSeleccione una opción: ").strip()
+        
+        if opcion == "1":
+            registrar_venta(db)
+        elif opcion == "2":
+            agregar_producto(db)
+        elif opcion == "3":
+            ver_inventario(db)
+        elif opcion == "4":
+            registrar_cliente(db)
+        elif opcion == "5":
+            registrar_gasto(db)
+        elif opcion == "6":
+            ver_dashboard(db)
+        elif opcion == "7":
+            limpiar_pantalla()
+            print("Cerrando sistema... ¡Hasta luego!")
+            break
+        else:
+            print("\nOpción no válida. Intente de nuevo.")
+            pausar()
+
+if __name__ == "__main__":
+    menu()
