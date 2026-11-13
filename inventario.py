@@ -351,7 +351,7 @@ def pedir_flotante(mensaje):
         except ValueError:
             print("  [!] Por favor, introduce un valor numérico válido (ej. 15.50).")
 
-def menu_principal():
+def menu_inventario():
     sistema = SistemaInventario()
 
     while True:
@@ -492,4 +492,4 @@ def menu_principal():
         limpiar_pantalla()
 
 if __name__ == "__main__":
-    menu_principal()
+    menu_inventario()
