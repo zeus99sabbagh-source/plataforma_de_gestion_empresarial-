@@ -1,29 +1,78 @@
 import json
 import os
+import tempfile
+import shutil
 from datetime import datetime
 
 ARCHIVO_DB = "empresa_db.json"
 
-# --- UTILIDAD DE LIMPIEZA DE TERMINAL ---
+# --- 1. GESTIÓN DE PERSISTENCIA Y TRANSACCIONES ---
+class GestorPersistencia:
+    def __init__(self, archivo_db=ARCHIVO_DB):
+        self.archivo_db = archivo_db
+
+    def cargar(self):
+        if not os.path.exists(self.archivo_db):
+            return {
+                "inventario": {},
+                "clientes": {},
+                "ventas": [],
+                "caja": {"saldo_actual": 0.0, "movimientos": []}
+            }
+        try:
+            with open(self.archivo_db, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            print("Error: Base de datos corrupta. Inicializando estructura limpia...")
+            return {"inventario": {}, "clientes": {}, "ventas": [], "caja": {"saldo_actual": 0.0, "movimientos": []}}
+
+    def guardar(self, db):
+        dir_name = os.path.dirname(self.archivo_db) or "."
+        with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8") as tf:
+            json.dump(db, tf, indent=4, ensure_ascii=False)
+            temp_name = tf.name
+        os.replace(temp_name, self.archivo_db)
+
+    def crear_backup(self):
+        if not os.path.exists(self.archivo_db):
+            return False, "El archivo de base de datos aún no existe."
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        nombre_backup = f"empresa_db_backup_{timestamp}.json"
+        try:
+            shutil.copy2(self.archivo_db, nombre_backup)
+            return True, nombre_backup
+        except Exception as e:
+            return False, str(e)
+
+    def restaurar_backup(self, archivo_backup):
+        if not os.path.exists(archivo_backup):
+            return False, "El archivo de respaldo seleccionado no existe."
+        try:
+            shutil.copy2(archivo_backup, self.archivo_db)
+            return True, "Restauración exitosa."
+        except Exception as e:
+            return False, str(e)
+
+class TransaccionDB:
+    def __init__(self, gestor):
+        self.gestor = gestor
+        self.db = gestor.cargar()
+
+    def __enter__(self):
+        return self.db
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            print(f"\n[TRANSACCIÓN ABORTADA] Error: {exc_val}. Revirtiendo cambios...")
+            return False
+        else:
+            self.gestor.guardar(self.db)
+            return True
+
+# --- 2. UTILIDADES GLOBALES Y LIMPIEZA DE TERMINAL ---
 def limpiar_pantalla():
-    # 'nt' corresponde a Windows, de lo contrario es Linux/Mac
-    os.system('cls' if os.name == 'nt' else 'clear')
-
-# --- 1. GESTIÓN DE PERSISTENCIA (Fuente Única de Verdad) ---
-def cargar_datos():
-    if not os.path.exists(ARCHIVO_DB):
-        return {
-            "inventario": {},
-            "clientes": {},
-            "ventas": [],
-            "caja": {"saldo_actual": 0.0, "movimientos": []}
-        }
-    with open(ARCHIVO_DB, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def guardar_datos(db):
-    with open(ARCHIVO_DB, "w", encoding="utf-8") as f:
-        json.dump(db, f, indent=4, ensure_ascii=False)
+    print("\033[H\033[J", end="")
 
 def obtener_fecha():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -31,33 +80,41 @@ def obtener_fecha():
 def pausar():
     input("\nPresiona [Enter] para continuar...")
 
-# --- 2. MÓDULO DE INVENTARIO ---
+def leer_flotante(mensaje):
+    while True:
+        try:
+            return float(input(mensaje))
+        except ValueError:
+            print("Error: Por favor, ingrese un número válido.")
+
+def leer_entero(mensaje):
+    while True:
+        try:
+            return int(input(mensaje))
+        except ValueError:
+            print("Error: Por favor, ingrese un número entero válido.")
+
+# --- 3. MÓDULO DE INVENTARIO ---
 def agregar_producto(db):
     limpiar_pantalla()
     print("\n--- NUEVO PRODUCTO / ACTUALIZAR STOCK ---")
     codigo = input("Código del producto (ej. P001): ").strip().upper()
+    
     if codigo in db["inventario"]:
-        try:
-            cant = int(input(f"Producto existente ({db['inventario'][codigo]['nombre']}). Cantidad a sumar: "))
-            if cant > 0:
-                db["inventario"][codigo]["stock"] += cant
-                guardar_datos(db)
-                print("\nStock actualizado correctamente.")
-        except ValueError:
-            print("\nError: Ingresa un número entero válido.")
+        cant = leer_entero(f"Producto existente ({db['inventario'][codigo]['nombre']}). Cantidad a sumar: ")
+        if cant > 0:
+            db["inventario"][codigo]["stock"] += cant
+            print("\nStock actualizado correctamente.")
+        else:
+            print("\nCantidad inválida.")
         pausar()
         return
 
     nombre = input("Nombre del producto: ").strip()
-    try:
-        costo = float(input("Costo unitario de compra ($): "))
-        precio = float(input("Precio unitario de venta ($): "))
-        stock = int(input("Stock inicial: "))
-        stock_min = int(input("Stock mínimo para alerta: "))
-    except ValueError:
-        print("\nError: Valores numéricos inválidos.")
-        pausar()
-        return
+    costo = leer_flotante("Costo unitario de compra ($): ")
+    precio = leer_flotante("Precio unitario de venta ($): ")
+    stock = leer_entero("Stock inicial: ")
+    stock_min = leer_entero("Stock mínimo para alerta: ")
 
     db["inventario"][codigo] = {
         "nombre": nombre,
@@ -66,7 +123,6 @@ def agregar_producto(db):
         "stock": stock,
         "stock_min": stock_min
     }
-    guardar_datos(db)
     print(f"\nProducto '{nombre}' registrado con éxito.")
     pausar()
 
@@ -81,7 +137,7 @@ def ver_inventario(db):
             print(f"[{cod}] {p['nombre']} | Stock: {p['stock']} | Costo: ${p['costo']:.2f} | Venta: ${p['precio']:.2f}{alerta}")
     pausar()
 
-# --- 3. MÓDULO DE CLIENTES (CRM Básico) ---
+# --- 4. MÓDULO DE CLIENTES (CRM Básico) ---
 def registrar_cliente(db):
     limpiar_pantalla()
     print("\n--- REGISTRAR CLIENTE ---")
@@ -93,99 +149,91 @@ def registrar_cliente(db):
     nombre = input("Nombre o Razón Social: ").strip()
     telefono = input("Teléfono de contacto: ").strip()
     db["clientes"][id_cliente] = {"nombre": nombre, "telefono": telefono, "compras": 0}
-    guardar_datos(db)
     print("\nCliente registrado con éxito.")
     pausar()
 
-# --- 4. MÓDULO DE VENTAS (POS) ---
-def registrar_venta(db):
+# --- 5. MÓDULO DE VENTAS (POS Transaccional) ---
+def registrar_venta(gestor):
     limpiar_pantalla()
     print("\n--- REGISTRAR VENTA ---")
-    if not db["inventario"]:
-        print("No hay productos en el inventario para vender.")
-        pausar()
-        return
-
-    codigo = input("Código del producto a vender: ").strip().upper()
-    if codigo not in db["inventario"]:
-        print("\nProducto no encontrado.")
-        pausar()
-        return
-
-    producto = db["inventario"][codigo]
     try:
-        cantidad = int(input(f"Cantidad de '{producto['nombre']}' (Disponible: {producto['stock']}): "))
-        if cantidad <= 0 or cantidad > producto["stock"]:
-            print("\nError: Cantidad inválida o stock insuficiente.")
-            pausar()
-            return
-    except ValueError:
-        print("\nError: Ingresa un número entero.")
-        pausar()
-        return
+        with TransaccionDB(gestor) as db:
+            if not db["inventario"]:
+                print("No hay productos en el inventario para vender.")
+                return
 
-    id_cliente = input("ID del cliente (dejar vacío para 'Consumidor Final'): ").strip()
-    nombre_cliente = "Consumidor Final"
-    if id_cliente in db["clientes"]:
-        nombre_cliente = db["clientes"][id_cliente]["nombre"]
-        db["clientes"][id_cliente]["compras"] += 1
+            codigo = input("Código del producto a vender: ").strip().upper()
+            if codigo not in db["inventario"]:
+                raise ValueError("Producto no encontrado.")
 
-    total_venta = cantidad * producto["precio"]
-    costo_total = cantidad * producto["costo"]
-    ganancia = total_venta - costo_total
-    fecha = obtener_fecha()
+            producto = db["inventario"][codigo]
+            cantidad = leer_entero(f"Cantidad de '{producto['nombre']}' (Disponible: {producto['stock']}): ")
+            
+            if cantidad <= 0 or cantidad > producto["stock"]:
+                raise ValueError("Cantidad inválida o stock insuficiente.")
 
-    producto["stock"] -= cantidad
+            id_cliente = input("ID del cliente (dejar vacío para 'Consumidor Final'): ").strip()
+            nombre_cliente = "Consumidor Final"
+            if id_cliente in db["clientes"]:
+                nombre_cliente = db["clientes"][id_cliente]["nombre"]
+                db["clientes"][id_cliente]["compras"] += 1
+
+            total_venta = cantidad * producto["precio"]
+            costo_total = cantidad * producto["costo"]
+            ganancia = total_venta - costo_total
+            fecha = obtener_fecha()
+
+            producto["stock"] -= cantidad
+            db["ventas"].append({
+                "fecha": fecha, "producto": producto["nombre"],
+                "cantidad": cantidad, "total": total_venta,
+                "ganancia_neta": ganancia, "cliente": nombre_cliente
+            })
+
+            db["caja"]["saldo_actual"] += total_venta
+            db["caja"]["movimientos"].append({
+                "fecha": fecha, "tipo": "INGRESO",
+                "concepto": f"Venta {cantidad}x {producto['nombre']} ({nombre_cliente})",
+                "monto": total_venta
+            })
+
+            print(f"\nVenta procesada con éxito. Total cobrado: ${total_venta:.2f}")
+    except Exception as e:
+        print(f"\nOperación cancelada: {e}")
     
-    db["ventas"].append({
-        "fecha": fecha,
-        "producto": producto["nombre"],
-        "cantidad": cantidad,
-        "total": total_venta,
-        "ganancia_neta": ganancia,
-        "cliente": nombre_cliente
-    })
-
-    db["caja"]["saldo_actual"] += total_venta
-    db["caja"]["movimientos"].append({
-        "fecha": fecha,
-        "tipo": "INGRESO",
-        "concepto": f"Venta {cantidad}x {producto['nombre']} ({nombre_cliente})",
-        "monto": total_venta
-    })
-
-    guardar_datos(db)
-    print(f"\nVenta procesada. Total cobrado: ${total_venta:.2f}")
     pausar()
 
-# --- 5. MÓDULO DE CAJA Y FINANZAS ---
-def registrar_gasto(db):
+# --- 6. MÓDULO DE CAJA Y FINANZAS ---
+def registrar_gasto(gestor):
     limpiar_pantalla()
     print("\n--- REGISTRAR GASTO / EGRESO ---")
     concepto = input("Concepto del gasto (ej. Pago de luz, Compra mercancía): ").strip()
-    try:
-        monto = float(input("Monto del gasto ($): "))
-        if monto <= 0:
-            print("\nEl monto debe ser mayor a cero.")
-            pausar()
-            return
-    except ValueError:
-        print("\nError: Monto inválido.")
+    monto = leer_flotante("Monto del gasto ($): ")
+
+    if monto <= 0:
+        print("\nEl monto debe ser mayor a cero.")
         pausar()
         return
 
-    db["caja"]["saldo_actual"] -= monto
-    db["caja"]["movimientos"].append({
-        "fecha": obtener_fecha(),
-        "tipo": "EGRESO",
-        "concepto": concepto,
-        "monto": -monto
-    })
-    guardar_datos(db)
-    print("\nGasto registrado en flujo de caja.")
+    try:
+        with TransaccionDB(gestor) as db:
+            if db["caja"]["saldo_actual"] < monto:
+                print("\n[ADVERTENCIA] El gasto supera el saldo actual en caja, pero se registrará igual.")
+            
+            db["caja"]["saldo_actual"] -= monto
+            db["caja"]["movimientos"].append({
+                "fecha": obtener_fecha(),
+                "tipo": "EGRESO",
+                "concepto": concepto,
+                "monto": -monto
+            })
+            print("\nGasto registrado en flujo de caja.")
+    except Exception as e:
+        print(f"\nError al registrar el gasto: {e}")
+    
     pausar()
 
-# --- 6. REPORTERÍA E INDICADORES (KPIs) ---
+# --- 7. REPORTERÍA E INDICADORES (KPIs) ---
 def ver_dashboard(db):
     limpiar_pantalla()
     print("\n================ DASHBOARD GERENCIAL ================")
@@ -193,23 +241,100 @@ def ver_dashboard(db):
     ganancia_bruta = sum(v["ganancia_neta"] for v in db["ventas"])
     total_egresos = sum(abs(m["monto"]) for m in db["caja"]["movimientos"] if m["tipo"] == "EGRESO")
     
-    print(f"Saldo actual en Caja:       ${db['caja']['saldo_actual']:.2f}")
+    print(f"Saldo actual en Caja:        ${db['caja']['saldo_actual']:.2f}")
     print(f"Ingresos totales por venta: ${total_ingresos:.2f}")
-    print(f"Ganancia real (Margen):     ${ganancia_bruta:.2f}")
-    print(f"Egresos operativos:         ${total_egresos:.2f}")
+    print(f"Ganancia real (Margen):      ${ganancia_bruta:.2f}")
+    print(f"Egresos operativos:          ${total_egresos:.2f}")
     print(f"Total de ventas realizadas: {len(db['ventas'])}")
     
     bajo_stock = [p["nombre"] for p in db["inventario"].values() if p["stock"] <= p["stock_min"]]
     if bajo_stock:
-        print(f"ALERTA DE REPOSICIÓN:       {', '.join(bajo_stock)}")
+        print(f"ALERTA DE REPOSICIÓN:        {', '.join(bajo_stock)}")
     print("=====================================================")
     pausar()
 
+# --- 8. GESTIÓN DEL ARCHIVO JSON (BACKUP / INFO) ---
+def gestionar_archivo_json(gestor):
+    while True:
+        limpiar_pantalla()
+        print("=== GESTIÓN DEL ARCHIVO DE BASE DE DATOS (JSON) ===")
+        print("1. Ver Estado e Info del Archivo")
+        print("2. Crear Copia de Seguridad (Backup)")
+        print("3. Restaurar Copia de Seguridad")
+        print("4. Volver al Menú Principal")
+        
+        op = input("\nSeleccione una opción: ").strip()
+        
+        if op == "1":
+            limpiar_pantalla()
+            print("\n--- ESTADO DEL ARCHIVO ---")
+            if os.path.exists(gestor.archivo_db):
+                tamano_bytes = os.path.getsize(gestor.archivo_db)
+                modificacion = datetime.fromtimestamp(os.path.getmtime(gestor.archivo_db)).strftime("%Y-%m-%d %H:%M:%S")
+                db = gestor.cargar()
+                print(f"Ruta del archivo:       {os.path.abspath(gestor.archivo_db)}")
+                print(f"Tamaño en disco:        {tamano_bytes} bytes ({tamano_bytes / 1024:.2f} KB)")
+                print(f"Última modificación:    {modificacion}")
+                print(f"Productos registrados:  {len(db.get('inventario', {}))}")
+                print(f"Clientes registrados:   {len(db.get('clientes', {}))}")
+                print(f"Ventas totales:         {len(db.get('ventas', []))}")
+                print(f"Movimientos de caja:    {len(db.get('caja', {}).get('movimientos', []))}")
+            else:
+                print("El archivo de base de datos aún no ha sido creado.")
+            pausar()
+            
+        elif op == "2":
+            limpiar_pantalla()
+            print("\n--- CREAR COPIA DE SEGURIDAD ---")
+            exito, resultado = gestor.crear_backup()
+            if exito:
+                print(f"\n¡Backup creado exitosamente!\nArchivo guardado como: {resultado}")
+            else:
+                print(f"\nError al crear backup: {resultado}")
+            pausar()
+            
+        elif op == "3":
+            limpiar_pantalla()
+            print("\n--- RESTAURAR COPIA DE SEGURIDAD ---")
+            backups = [f for f in os.listdir(".") if f.startswith("empresa_db_backup_") and f.endswith(".json")]
+            
+            if not backups:
+                print("No se encontraron archivos de respaldo en el directorio.")
+                pausar()
+                continue
+                
+            print("Backups disponibles:")
+            for i, b in enumerate(backups, 1):
+                print(f"{i}. {b}")
+                
+            eleccion = input("\nNúmero del backup a restaurar (o presione Enter para cancelar): ").strip()
+            if eleccion.isdigit():
+                idx = int(eleccion) - 1
+                if 0 <= idx < len(backups):
+                    confirmacion = input(f"¿Estás seguro de reemplazar la base de datos actual con '{backups[idx]}'?: (s/n): ").strip().lower()
+                    if confirmacion == 's':
+                        exito, mensaje = gestor.restaurar_backup(backups[idx])
+                        print(f"\n{mensaje}")
+                    else:
+                        print("\nRestauración cancelada.")
+                else:
+                    print("\nOpción de respaldo inválida.")
+            pausar()
+            
+        elif op == "4":
+            break
+        else:
+            print("\nOpción no válida.")
+            pausar()
+
 # --- MENÚ PRINCIPAL ---
 def menu():
-    db = cargar_datos()
+    gestor = GestorPersistencia()
+    
     while True:
-        limpiar_pantalla() # Limpia la pantalla cada vez que regresa al menú principal
+        db = gestor.cargar()
+        limpiar_pantalla()
+        
         print("=== SISTEMA DE GESTIÓN EMPRESARIAL ===")
         print("1. Registrar Venta (POS)")
         print("2. Agregar / Actualizar Producto")
@@ -217,23 +342,28 @@ def menu():
         print("4. Registrar Cliente")
         print("5. Registrar Gasto (Egreso)")
         print("6. Ver Dashboard (KPIs)")
-        print("7. Salir")
+        print("7. Gestión de Archivo JSON (Backup / Info)")
+        print("8. Salir")
         
         opcion = input("\nSeleccione una opción: ").strip()
         
         if opcion == "1":
-            registrar_venta(db)
+            registrar_venta(gestor)
         elif opcion == "2":
-            agregar_producto(db)
+            with TransaccionDB(gestor) as db_trans:
+                agregar_producto(db_trans)
         elif opcion == "3":
             ver_inventario(db)
         elif opcion == "4":
-            registrar_cliente(db)
+            with TransaccionDB(gestor) as db_trans:
+                registrar_cliente(db_trans)
         elif opcion == "5":
-            registrar_gasto(db)
+            registrar_gasto(gestor)
         elif opcion == "6":
             ver_dashboard(db)
         elif opcion == "7":
+            gestionar_archivo_json(gestor)
+        elif opcion == "8":
             limpiar_pantalla()
             print("Cerrando sistema... ¡Hasta luego!")
             break
