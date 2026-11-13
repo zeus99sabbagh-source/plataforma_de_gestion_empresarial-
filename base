@@ -6,6 +6,16 @@ from datetime import datetime
 
 ARCHIVO_DB = "empresa_db.json"
 
+# --- EXCEPCIÓN DE CONTROL ---
+class VolverAlMenuException(Exception):
+    """Excepción personalizada para abortar procesos y regresar al menú."""
+    pass
+
+def verificar_salida(texto):
+    """Verifica si el usuario desea cancelar y volver al menú principal."""
+    if texto.strip().lower() in ["0", "salir", "menu", "volver"]:
+        raise VolverAlMenuException()
+
 # --- 1. GESTIÓN DE PERSISTENCIA Y TRANSACCIONES ---
 class GestorPersistencia:
     def __init__(self, archivo_db=ARCHIVO_DB):
@@ -64,15 +74,21 @@ class TransaccionDB:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is not None:
+            if issubclass(exc_type, VolverAlMenuException):
+                print("\n\n[OPERACIÓN CANCELADA] Regresando al menú principal...")
+                return True  # Suprime la excepción y evita guardar cambios
             print(f"\n[TRANSACCIÓN ABORTADA] Error: {exc_val}. Revirtiendo cambios...")
             return False
         else:
             self.gestor.guardar(self.db)
             return True
 
-# --- 2. UTILIDADES GLOBALES Y LIMPIEZA DE TERMINAL ---
+# --- 2. UTILIDADES GLOBALES Y VALIDACIONES ---
 def limpiar_pantalla():
-    print("\033[H\033[J", end="")
+    if os.name == 'nt':
+        os.system('cls')
+    else:
+        print("\033[2J\033[3J\033[H", end="")
 
 def obtener_fecha():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -80,28 +96,44 @@ def obtener_fecha():
 def pausar():
     input("\nPresiona [Enter] para continuar...")
 
-def leer_flotante(mensaje):
+def solicitar_con_aviso(mensaje, validador_tipo=str, permitir_vacio=False):
+    """
+    Solicita un dato limpiando la pantalla y mostrando un aviso si el intento anterior falló.
+    Evita cualquier acumulación de texto en la terminal.
+    """
+    error_msg = ""
     while True:
+        limpiar_pantalla()
+        print("=== SISTEMA DE GESTIÓN EMPRESARIAL ===")
+        print("(Escriba '0' en cualquier momento para cancelar y volver al menú)\n")
+        
+        if error_msg:
+            print(f"[AVISO] {error_msg}\n")
+            
+        entrada = input(mensaje).strip()
+        verificar_salida(entrada)
+        
+        if not permitir_vacio and not entrada:
+            error_msg = "Este campo no puede estar vacío. Intente de nuevo."
+            continue
+            
+        if permitir_vacio and not entrada:
+            return ""
+            
         try:
-            return float(input(mensaje))
+            return validador_tipo(entrada)
         except ValueError:
-            print("Error: Por favor, ingrese un número válido.")
-
-def leer_entero(mensaje):
-    while True:
-        try:
-            return int(input(mensaje))
-        except ValueError:
-            print("Error: Por favor, ingrese un número entero válido.")
+            tipo_nombre = "un número entero válido" if validador_tipo == int else "un número válido (ej. 15.50)"
+            error_msg = f"Por favor, ingrese {tipo_nombre}."
 
 # --- 3. MÓDULO DE INVENTARIO ---
 def agregar_producto(db):
-    limpiar_pantalla()
-    print("\n--- NUEVO PRODUCTO / ACTUALIZAR STOCK ---")
-    codigo = input("Código del producto (ej. P001): ").strip().upper()
+    codigo = solicitar_con_aviso("Código del producto [Ej: P001]: ").upper()
     
     if codigo in db["inventario"]:
-        cant = leer_entero(f"Producto existente ({db['inventario'][codigo]['nombre']}). Cantidad a sumar: ")
+        limpiar_pantalla()
+        print("\n--- ACTUALIZAR STOCK ---")
+        cant = solicitar_con_aviso(f"Producto existente ({db['inventario'][codigo]['nombre']}). Cantidad a sumar [Ej: 5]: ", int)
         if cant > 0:
             db["inventario"][codigo]["stock"] += cant
             print("\nStock actualizado correctamente.")
@@ -110,11 +142,11 @@ def agregar_producto(db):
         pausar()
         return
 
-    nombre = input("Nombre del producto: ").strip()
-    costo = leer_flotante("Costo unitario de compra ($): ")
-    precio = leer_flotante("Precio unitario de venta ($): ")
-    stock = leer_entero("Stock inicial: ")
-    stock_min = leer_entero("Stock mínimo para alerta: ")
+    nombre = solicitar_con_aviso("Nombre del producto [Ej: Café Molido 500g]: ")
+    costo = solicitar_con_aviso("Costo unitario de compra ($) [Ej: 3.50]: ", float)
+    precio = solicitar_con_aviso("Precio unitario de venta ($) [Ej: 5.00]: ", float)
+    stock = solicitar_con_aviso("Stock inicial [Ej: 20]: ", int)
+    stock_min = solicitar_con_aviso("Stock mínimo para alerta [Ej: 5]: ", int)
 
     db["inventario"][codigo] = {
         "nombre": nombre,
@@ -123,6 +155,7 @@ def agregar_producto(db):
         "stock": stock,
         "stock_min": stock_min
     }
+    limpiar_pantalla()
     print(f"\nProducto '{nombre}' registrado con éxito.")
     pausar()
 
@@ -139,44 +172,45 @@ def ver_inventario(db):
 
 # --- 4. MÓDULO DE CLIENTES (CRM Básico) ---
 def registrar_cliente(db):
-    limpiar_pantalla()
-    print("\n--- REGISTRAR CLIENTE ---")
-    id_cliente = input("Cédula / RIF / ID del cliente: ").strip()
+    id_cliente = solicitar_con_aviso("Cédula / RIF / ID del cliente [Ej: V-12345678]: ")
     if id_cliente in db["clientes"]:
+        limpiar_pantalla()
         print("\nEl cliente ya se encuentra registrado.")
         pausar()
         return
-    nombre = input("Nombre o Razón Social: ").strip()
-    telefono = input("Teléfono de contacto: ").strip()
+    nombre = solicitar_con_aviso("Nombre o Razón Social [Ej: Comercializadora XYZ, C.A.]: ")
+    telefono = solicitar_con_aviso("Teléfono de contacto [Ej: 0412-1234567]: ")
     db["clientes"][id_cliente] = {"nombre": nombre, "telefono": telefono, "compras": 0}
+    limpiar_pantalla()
     print("\nCliente registrado con éxito.")
     pausar()
 
 # --- 5. MÓDULO DE VENTAS (POS Transaccional) ---
 def registrar_venta(gestor):
-    limpiar_pantalla()
-    print("\n--- REGISTRAR VENTA ---")
     try:
         with TransaccionDB(gestor) as db:
             if not db["inventario"]:
+                limpiar_pantalla()
                 print("No hay productos en el inventario para vender.")
+                pausar()
                 return
 
-            codigo = input("Código del producto a vender: ").strip().upper()
+            codigo = solicitar_con_aviso("Código del producto a vender [Ej: P001]: ").upper()
             if codigo not in db["inventario"]:
                 raise ValueError("Producto no encontrado.")
 
             producto = db["inventario"][codigo]
-            cantidad = leer_entero(f"Cantidad de '{producto['nombre']}' (Disponible: {producto['stock']}): ")
+            cantidad = solicitar_con_aviso(f"Cantidad de '{producto['nombre']}' (Disponible: {producto['stock']}) [Ej: 2]: ", int)
             
             if cantidad <= 0 or cantidad > producto["stock"]:
                 raise ValueError("Cantidad inválida o stock insuficiente.")
 
-            id_cliente = input("ID del cliente (dejar vacío para 'Consumidor Final'): ").strip()
+            id_cliente_input = solicitar_con_aviso("ID del cliente [Dejar en blanco para 'Consumidor Final', o '0' para cancelar]: ", str, permitir_vacio=True)
+            
             nombre_cliente = "Consumidor Final"
-            if id_cliente in db["clientes"]:
-                nombre_cliente = db["clientes"][id_cliente]["nombre"]
-                db["clientes"][id_cliente]["compras"] += 1
+            if id_cliente_input in db["clientes"]:
+                nombre_cliente = db["clientes"][id_cliente_input]["nombre"]
+                db["clientes"][id_cliente_input]["compras"] += 1
 
             total_venta = cantidad * producto["precio"]
             costo_total = cantidad * producto["costo"]
@@ -197,7 +231,10 @@ def registrar_venta(gestor):
                 "monto": total_venta
             })
 
+            limpiar_pantalla()
             print(f"\nVenta procesada con éxito. Total cobrado: ${total_venta:.2f}")
+    except VolverAlMenuException:
+        print("\n\n[OPERACIÓN CANCELADA] Regresando al menú principal...")
     except Exception as e:
         print(f"\nOperación cancelada: {e}")
     
@@ -205,17 +242,15 @@ def registrar_venta(gestor):
 
 # --- 6. MÓDULO DE CAJA Y FINANZAS ---
 def registrar_gasto(gestor):
-    limpiar_pantalla()
-    print("\n--- REGISTRAR GASTO / EGRESO ---")
-    concepto = input("Concepto del gasto (ej. Pago de luz, Compra mercancía): ").strip()
-    monto = leer_flotante("Monto del gasto ($): ")
-
-    if monto <= 0:
-        print("\nEl monto debe ser mayor a cero.")
-        pausar()
-        return
-
     try:
+        concepto = solicitar_con_aviso("Concepto del gasto [Ej: Pago de electricidad]: ")
+        monto = solicitar_con_aviso("Monto del gasto ($) [Ej: 45.00]: ", float)
+
+        if monto <= 0:
+            print("\nEl monto debe ser mayor a cero.")
+            pausar()
+            return
+
         with TransaccionDB(gestor) as db:
             if db["caja"]["saldo_actual"] < monto:
                 print("\n[ADVERTENCIA] El gasto supera el saldo actual en caja, pero se registrará igual.")
@@ -227,7 +262,10 @@ def registrar_gasto(gestor):
                 "concepto": concepto,
                 "monto": -monto
             })
+            limpiar_pantalla()
             print("\nGasto registrado en flujo de caja.")
+    except VolverAlMenuException:
+        print("\n\n[OPERACIÓN CANCELADA] Regresando al menú principal...")
     except Exception as e:
         print(f"\nError al registrar el gasto: {e}")
     
@@ -263,7 +301,7 @@ def gestionar_archivo_json(gestor):
         print("3. Restaurar Copia de Seguridad")
         print("4. Volver al Menú Principal")
         
-        op = input("\nSeleccione una opción: ").strip()
+        op = input("\nSeleccione una opción [Ej: 1]: ").strip()
         
         if op == "1":
             limpiar_pantalla()
@@ -307,7 +345,7 @@ def gestionar_archivo_json(gestor):
             for i, b in enumerate(backups, 1):
                 print(f"{i}. {b}")
                 
-            eleccion = input("\nNúmero del backup a restaurar (o presione Enter para cancelar): ").strip()
+            eleccion = input("\nNúmero del backup a restaurar (o presione Enter para cancelar) [Ej: 1]: ").strip()
             if eleccion.isdigit():
                 idx = int(eleccion) - 1
                 if 0 <= idx < len(backups):
@@ -345,30 +383,34 @@ def menu():
         print("7. Gestión de Archivo JSON (Backup / Info)")
         print("8. Salir")
         
-        opcion = input("\nSeleccione una opción: ").strip()
+        opcion = input("\nSeleccione una opción [Ej: 1]: ").strip()
         
-        if opcion == "1":
-            registrar_venta(gestor)
-        elif opcion == "2":
-            with TransaccionDB(gestor) as db_trans:
-                agregar_producto(db_trans)
-        elif opcion == "3":
-            ver_inventario(db)
-        elif opcion == "4":
-            with TransaccionDB(gestor) as db_trans:
-                registrar_cliente(db_trans)
-        elif opcion == "5":
-            registrar_gasto(gestor)
-        elif opcion == "6":
-            ver_dashboard(db)
-        elif opcion == "7":
-            gestionar_archivo_json(gestor)
-        elif opcion == "8":
-            limpiar_pantalla()
-            print("Cerrando sistema... ¡Hasta luego!")
-            break
-        else:
-            print("\nOpción no válida. Intente de nuevo.")
+        try:
+            if opcion == "1":
+                registrar_venta(gestor)
+            elif opcion == "2":
+                with TransaccionDB(gestor) as db_trans:
+                    agregar_producto(db_trans)
+            elif opcion == "3":
+                ver_inventario(db)
+            elif opcion == "4":
+                with TransaccionDB(gestor) as db_trans:
+                    registrar_cliente(db_trans)
+            elif opcion == "5":
+                registrar_gasto(gestor)
+            elif opcion == "6":
+                ver_dashboard(db)
+            elif opcion == "7":
+                gestionar_archivo_json(gestor)
+            elif opcion == "8":
+                limpiar_pantalla()
+                print("Cerrando sistema... ¡Hasta luego!")
+                break
+            else:
+                print("\nOpción no válida. Intente de nuevo.")
+                pausar()
+        except VolverAlMenuException:
+            print("\n\n[OPERACIÓN CANCELADA] Regresando al menú principal...")
             pausar()
 
 if __name__ == "__main__":
