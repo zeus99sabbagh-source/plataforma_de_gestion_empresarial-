@@ -1,4 +1,39 @@
-from base import limpiar_pantalla, pausar, verificar_salida, TransaccionDB, VolverAlMenuException, obtener_fecha, depurar
+import os
+from datetime import datetime
+
+# --- CONFIGURACIÓN DE DEPURACIÓN Y CONTROL ---
+MODO_DEBUG = True  # Cambia a False para silenciar los mensajes de depuración en consola
+
+def depurar(mensaje, tipo="INFO"):
+    """Función centralizada para controlar y limpiar los mensajes impresos en consola."""
+    if MODO_DEBUG:
+        prefijos = {
+            "INFO": "ℹ️ [INFO]",
+            "ADVER": "⚠️ [ADVERTENCIA]",
+            "ERROR": "❌ [ERROR]",
+            "OK": "✅ [ÉXITO]"
+        }
+        print(f"{prefijos.get(tipo, '📌')} {mensaje}")
+
+class VolverAlMenuException(Exception):
+    """Excepción personalizada para abortar procesos y regresar al menú."""
+    pass
+
+def verificar_salida(texto):
+    if texto.strip().lower() in ["0", "salir", "menu", "volver"]:
+        raise VolverAlMenuException()
+
+def limpiar_pantalla():
+    if os.name == 'nt':
+        os.system('cls')
+    else:
+        print("\033[2J\033[3J\033[H", end="")
+
+def pausar():
+    input("\nPresiona [Enter] para continuar...")
+
+def obtener_fecha():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 def en_periodo(fecha: str, desde: str | None = None, hasta: str | None = None) -> bool:
     dia = fecha[:10]
@@ -10,6 +45,7 @@ def en_periodo(fecha: str, desde: str | None = None, hasta: str | None = None) -
 
 def registrar_venta(gestor):
     from finanzas.margenes import obtener_tabla_inventario, obtener_tabla_clientes, solicitar_con_aviso
+    from base import TransaccionDB  # Importación local para evitar ciclos
     try:
         with TransaccionDB(gestor) as db:
             if not db["inventario"]:
@@ -60,7 +96,7 @@ def registrar_venta(gestor):
             limpiar_pantalla()
             depurar(f"Venta procesada con éxito. Total cobrado: ${total_venta:.2f}", "OK")
     except VolverAlMenuException:
-        pass
+        raise
     except Exception as e:
         depurar(f"Operación de venta cancelada o errónea: {e}", "ERROR")
     pausar()

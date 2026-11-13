@@ -4,42 +4,12 @@ import tempfile
 import shutil
 from datetime import datetime
 
-# --- CONFIGURACIÓN DE BASE DE DATOS Y DEPURACIÓN ---
+# Importamos utilidades y excepciones desde finanzas.periodo para unificar el contexto
+from finanzas.periodo import VolverAlMenuException, limpiar_pantalla, pausar, depurar, obtener_fecha
+
+# --- CONFIGURACIÓN DE BASE DE DATOS ---
 DIRECTORIO_ACTUAL = os.path.dirname(os.path.abspath(__file__))
 ARCHIVO_DB = os.path.join(DIRECTORIO_ACTUAL, "empresa_db.json")
-MODO_DEBUG = True  # Cambia a False para silenciar los mensajes de depuración en consola
-
-def depurar(mensaje, tipo="INFO"):
-    """Función centralizada para controlar y limpiar los mensajes impresos en consola."""
-    if MODO_DEBUG:
-        prefijos = {
-            "INFO": "ℹ️ [INFO]",
-            "ADVER": "⚠️ [ADVERTENCIA]",
-            "ERROR": "❌ [ERROR]",
-            "OK": "✅ [ÉXITO]"
-        }
-        print(f"{prefijos.get(tipo, '📌')} {mensaje}")
-
-# --- EXCEPCIÓN Y UTILIDADES GLOBALES ---
-class VolverAlMenuException(Exception):
-    """Excepción personalizada para abortar procesos y regresar al menú."""
-    pass
-
-def verificar_salida(texto):
-    if texto.strip().lower() in ["0", "salir", "menu", "volver"]:
-        raise VolverAlMenuException()
-
-def limpiar_pantalla():
-    if os.name == 'nt':
-        os.system('cls')
-    else:
-        print("\033[2J\033[3J\033[H", end="")
-
-def pausar():
-    input("\nPresiona [Enter] para continuar...")
-
-def obtener_fecha():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # --- GESTIÓN DE PERSISTENCIA Y TRANSACCIONES ---
 class GestorPersistencia:
@@ -141,7 +111,7 @@ class TransaccionDB:
 def menu():
     gestor = GestorPersistencia()
     
-    # Importaciones locales dentro de la función para romper cualquier importación circular
+    # Importaciones locales dentro de la función para evitar importaciones circulares
     from finanzas.periodo import registrar_venta, registrar_cliente
     from finanzas.margenes import agregar_producto, menu_inventario
     from finanzas.egresos import registrar_gasto

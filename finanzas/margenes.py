@@ -1,4 +1,4 @@
-from base import limpiar_pantalla, pausar, verificar_salida, VolverAlMenuException, TransaccionDB, depurar
+from finanzas.periodo import limpiar_pantalla, pausar, verificar_salida, VolverAlMenuException, depurar
 
 def obtener_tabla_inventario(db, titulo="📦 Productos disponibles en inventario:"):
     inventario = db.get("inventario", {})
@@ -203,13 +203,11 @@ def eliminar_categoria(db):
     pausar()
 
 def agregar_nueva_categoria(db):
-    """Función para añadir una nueva categoría de productos desde el menú de inventario."""
     limpiar_pantalla()
     print("=== AGREGAR NUEVA CATEGORÍA DE PRODUCTOS ===")
     nueva_cat = solicitar_con_aviso("Nombre de la nueva categoría: ").strip().title()
     if not nueva_cat:
         return
-    
     categorias = db.get("categorias", ["General"])
     if nueva_cat in categorias:
         depurar(f"La categoría '{nueva_cat}' ya existe.", "ADVER")
@@ -240,6 +238,7 @@ def ver_productos_por_categoria(db):
     pausar()
 
 def menu_inventario(gestor):
+    from base import TransaccionDB
     while True:
         db = gestor.cargar()
         limpiar_pantalla()

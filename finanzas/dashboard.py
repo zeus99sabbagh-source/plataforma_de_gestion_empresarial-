@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from base import limpiar_pantalla, pausar, verificar_salida, depurar
+from finanzas.periodo import limpiar_pantalla, pausar, verificar_salida, depurar
 
 def ver_dashboard(db):
     limpiar_pantalla()
