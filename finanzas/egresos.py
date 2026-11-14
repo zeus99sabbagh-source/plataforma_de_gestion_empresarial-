@@ -5,10 +5,10 @@ CATEGORIAS_NO_OPERATIVAS = {"compra_mercancia"}
 
 def movimientos_egreso(db: dict, desde=None, hasta=None, solo_operativos=False) -> list:
     resultado = []
-    for m in db["caja"]["movimientos"]:
-        if m["tipo"] != "EGRESO":
+    for m in db.get("caja", {}).get("movimientos", []):
+        if m.get("tipo") != "EGRESO":
             continue
-        if not en_periodo(m["fecha"], desde, hasta):
+        if not en_periodo(m.get("fecha", ""), desde, hasta):
             continue
         if solo_operativos and m.get("categoria") in CATEGORIAS_NO_OPERATIVAS:
             continue
@@ -17,13 +17,13 @@ def movimientos_egreso(db: dict, desde=None, hasta=None, solo_operativos=False) 
 
 def total_egresos(db: dict, desde=None, hasta=None, solo_operativos=False) -> float:
     movs = movimientos_egreso(db, desde, hasta, solo_operativos)
-    return round(sum(abs(m["monto"]) for m in movs), 2)
+    return round(sum(abs(m.get("monto", 0)) for m in movs), 2)
 
 def egresos_por_categoria(db: dict, desde=None, hasta=None) -> dict:
     totales = {}
     for m in movimientos_egreso(db, desde, hasta):
         cat = m.get("categoria", "sin_categoria")
-        totales[cat] = totales.get(cat, 0) + abs(m["monto"])
+        totales[cat] = totales.get(cat, 0) + abs(m.get("monto", 0))
     return {cat: round(total, 2) for cat, total in totales.items()}
 
 def registrar_gasto(gestor):
