@@ -317,30 +317,38 @@ def en_periodo(fecha: str, desde: str | None = None, hasta: str | None = None) -
 def registrar_cliente(db):
     """Módulo CRM: Registro de clientes."""
     limpiar_pantalla()
-    encabezado("Registrar Cliente")
-    
-    cedula = input("Cédula: ").strip().upper()
+    encabezado("Registrar cliente  ·  escriba '0' o 'salir' para volver")
+    print()
+
+    cedula = input(marca_prompt() + "Cédula / RIF / ID del cliente [Ej: V-12345678]: ").strip().upper()
     verificar_salida(cedula)
-    
+
     # [MEJORA] Validación de formato (Advertencia pasiva para no romper pruebas)
     if not re.match(r"^[VEJGvejg]-\d+$", cedula):
-        depurar("Aviso: El formato recomendado es V-12345678, E-, J- o G- seguido de números.", "ADVER")
-    
+        depurar("El formato recomendado es V-12345678, E-, J- o G- seguido de números.", "ADVER")
+
     if cedula in db["clientes"]:
-        print("Error: El cliente ya se encuentra registrado.")
+        depurar("El cliente ya se encuentra registrado en el sistema.", "ERROR")
         pausar()
         raise VolverAlMenuException()
-        
-    nombre = input("Nombre o Razón: ").strip()
-    telefono = input("Teléfono: ").strip()
-    
+
+    nombre = input(marca_prompt() + "Nombre o Razón Social: ").strip()
+    telefono = input(marca_prompt() + "Teléfono de contacto: ").strip()
+
     db["clientes"][cedula] = {
         "nombre": nombre,
         "telefono": telefono,
         "compras": 0
     }
-    
+
+    limpiar_pantalla()
     depurar("Cliente registrado con éxito.", "OK")
+    print()
+    panel_kpis("Ficha del cliente", [
+        ("Cédula / RIF", cedula, ""),
+        ("Nombre o Razón Social", nombre or "-", ""),
+        ("Teléfono", telefono or "-", ""),
+    ], "verde")
     pausar()
 
 
@@ -351,46 +359,52 @@ def registrar_venta(gestor):
 
     with TransaccionDB(gestor) as db:
         limpiar_pantalla()
-        encabezado("Punto de Venta (POS)")
+        encabezado("Punto de Venta (POS)  ·  escriba '0' o 'salir' para volver")
+        print()
 
         if not db["inventario"]:
-            print("Inventario vacío. No hay productos para vender.")
+            depurar("Inventario vacío. No hay productos para vender.", "ADVER")
             pausar()
             raise VolverAlMenuException()
 
-        codigo = input("Código del producto a vender (0 para cancelar): ").strip().upper()
+        codigo = input(marca_prompt() + "Código del producto a vender (0 para cancelar) [Ej: P001]: ").strip().upper()
         verificar_salida(codigo)
-            
+
         if codigo not in db["inventario"]:
             # [MEJORA] Búsqueda flexible si se equivoca en el código o busca por nombre
             sugerencias = [c for c, p in db["inventario"].items() if codigo in p['nombre'].upper() or codigo in c]
+            limpiar_pantalla()
             if sugerencias:
-                print(f"Aviso: ¿Buscabas alguno de estos? {', '.join(sugerencias)}")
-            print("Error: Producto no encontrado.")
+                print(mensaje_caja(f"¿Buscabas alguno de estos? {', '.join(sugerencias)}"))
+                print()
+            depurar("Producto no encontrado.", "ERROR")
             pausar()
             raise VolverAlMenuException()
 
         producto = db["inventario"][codigo]
 
-        cantidad = solicitar_con_aviso(f"Cantidad de {producto['nombre']}: ", int, minimo=1)
+        cantidad = solicitar_con_aviso(
+            f"Cantidad de {producto['nombre']} (Disponible: {producto['stock']}) [Ej: 2]: ", int, minimo=1)
         if cantidad > producto["stock"]:
-            print("Error: stock insuficiente para esta venta.")
+            limpiar_pantalla()
+            depurar(f"No se puede vender: stock insuficiente (disponible: {producto['stock']}).", "ERROR")
             pausar()
             raise VolverAlMenuException()
 
-        cliente_id = input("ID del cliente (Enter para Consumidor Final): ").strip().upper()
+        cliente_id = input(marca_prompt() + "ID del cliente (Enter para Consumidor Final): ").strip().upper()
         nombre_cliente = "Consumidor Final"
-        
+        aviso_cliente = False
+
         if cliente_id:
             if cliente_id in db["clientes"]:
                 nombre_cliente = db["clientes"][cliente_id]["nombre"]
                 db["clientes"][cliente_id]["compras"] += 1
             else:
-                print("Aviso: Cliente no registrado. Se facturará a Consumidor Final.")
+                aviso_cliente = True
 
         total = cantidad * producto["precio"]
         ganancia_neta = cantidad * (producto["precio"] - producto["costo"])
-        
+
         # [MEJORA] Cálculo de IVA
         base_imponible = total / 1.16
         iva = total - base_imponible
@@ -413,14 +427,16 @@ def registrar_venta(gestor):
             "fecha": obtener_fecha()
         })
 
-        print("\n" + "─"*35)
-        print("        COMPROBANTE DIGITAL")
-        print("─"*35)
-        print(f"Cliente:  {nombre_cliente}")
-        print(f"Artículo: {producto['nombre']} (x{cantidad})")
-        print("─"*35)
-        print(f"Base Imponible: ${base_imponible:.2f}")
-        print(f"IVA (16%):      ${iva:.2f}")
-        print(f"Total cobrado: ${total:.2f}")
-        print("─"*35 + "\n")
+        limpiar_pantalla()
+        if aviso_cliente:
+            depurar("Cliente no registrado. Se facturará a Consumidor Final.", "ADVER")
+        depurar(f"Venta procesada con éxito. Total cobrado: ${total:.2f}", "OK")
+        print()
+        panel_kpis("Comprobante digital", [
+            ("Cliente", nombre_cliente, ""),
+            ("Artículo", f"{producto['nombre']} (x{cantidad})", ""),
+            ("Base imponible", dinero(base_imponible), ""),
+            ("IVA (16%)", dinero(iva), "amarillo"),
+            ("Total cobrado", dinero(total), "verde"),
+        ], "verde")
         pausar()
