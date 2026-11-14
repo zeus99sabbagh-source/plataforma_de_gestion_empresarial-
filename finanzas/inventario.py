@@ -1,7 +1,22 @@
+import re
 import sqlite3
 from datetime import datetime
-import time
-import os
+
+# Interfaz visual compartida con el resto del sistema (colores, marcos, tablas, mensajes)
+try:
+    from finanzas.periodo import (
+        limpiar_pantalla, pausar, depurar, encabezado, menu_opciones, tabla,
+        panel_kpis, mensaje_caja, dinero, marca_prompt, ancho_visual,
+    )
+except ImportError:     # Si se ejecuta este archivo suelto desde dentro de la carpeta finanzas/
+    from periodo import (
+        limpiar_pantalla, pausar, depurar, encabezado, menu_opciones, tabla,
+        panel_kpis, mensaje_caja, dinero, marca_prompt, ancho_visual,
+    )
+
+TOPE_COLUMNA = 24                       # Ancho máximo de cada columna en las tablas
+_NUMERICO = re.compile(r"^[-+$\d.,]+$")  # Valores que se alinean a la derecha (cifras y montos)
+_COLOR_TIPO = {"INGRESO": "verde", "MERMA": "rojo", "TRANSFERENCIA": "cyan", "AJUSTE": "amarillo"}
 
 
 class SistemaInventario:
@@ -10,7 +25,6 @@ class SistemaInventario:
         self.cursor = self.conn.cursor()
         self._inicializar_tablas()
 
-    
     def _inicializar_tablas(self):
         """Crea la estructura de tablas incluyendo costos unitarios e impacto financiero."""
         self.cursor.executescript('''
@@ -57,7 +71,6 @@ class SistemaInventario:
     # FUNCIONES DE REGISTRO Y OPERACIONES
     # ==========================================
 
-
     def crear_almacen(self, nombre, ubicacion):
         try:
             self.cursor.execute(
@@ -65,12 +78,12 @@ class SistemaInventario:
                 (nombre.strip(), ubicacion.strip())
             )
             self.conn.commit()
-            print(f"\n[OK] Almacén '{nombre}' registrado con éxito.")
-            
+            print()
+            depurar(f"Almacén '{nombre}' registrado con éxito.", "OK")
+
         except sqlite3.IntegrityError:
             limpiar_pantalla()
-            print(f"\n[ERROR] Ya existe un almacén con el nombre '{nombre}'.")
-            
+            depurar(f"Ya existe un almacén con el nombre '{nombre}'.", "ERROR")
 
     def crear_producto(self, sku, nombre, costo_unitario, stock_minimo):
         try:
@@ -79,12 +92,12 @@ class SistemaInventario:
                 (sku.strip().upper(), nombre.strip(), float(costo_unitario), int(stock_minimo))
             )
             self.conn.commit()
-            print(f"\n[OK] Producto '{nombre}' (SKU: {sku.upper()}) creado con costo ${costo_unitario:,.2f}.")
-            
+            print()
+            depurar(f"Producto '{nombre}' (SKU: {sku.upper()}) creado con costo {dinero(costo_unitario)}.", "OK")
+
         except sqlite3.IntegrityError:
             limpiar_pantalla()
-            print(f"\n[ERROR] El SKU '{sku}' ya está registrado.")
-            
+            depurar(f"El SKU '{sku}' ya está registrado.", "ERROR")
 
     def _obtener_costo_producto(self, producto_id):
         self.cursor.execute("SELECT costo_unitario FROM productos WHERE id = ?", (producto_id,))
@@ -123,105 +136,108 @@ class SistemaInventario:
         try:
             costo_unit = self._obtener_costo_producto(producto_id)
             self._actualizar_stock_directo(almacen_id, producto_id, cantidad_delta)
-            
+
             fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             impacto_financiero = cantidad_delta * costo_unit
-            
+
             self.cursor.execute('''
-                INSERT INTO movimientos 
+                INSERT INTO movimientos
                 (fecha, tipo, almacen_origen_id, almacen_destino_id, producto_id, cantidad, costo_unitario, impacto_financiero, motivo)
                 VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)
             ''', (fecha, tipo, almacen_id, producto_id, cantidad_delta, costo_unit, impacto_financiero, motivo))
-            
+
             self.conn.commit()
             limpiar_pantalla()
-            print(f"\n[OK] {tipo} registrado ({cantidad_delta:+} uds | Impacto contable: ${impacto_financiero:+,.2f}).")
+            depurar(f"{tipo} registrado ({cantidad_delta:+} uds | Impacto contable: "
+                    f"{'-' if impacto_financiero < 0 else '+'}{dinero(abs(impacto_financiero))}).", "OK")
         except ValueError as e:
             limpiar_pantalla()
             self.conn.rollback()
-            print(f"\n[ERROR DE OPERACIÓN] {e}")
+            depurar(f"Error de operación: {e}", "ERROR")
         except sqlite3.Error as e:
             limpiar_pantalla()
             self.conn.rollback()
-            print(f"\n[ERROR DE BASE DE DATOS] {e}")
+            depurar(f"Error de base de datos: {e}", "ERROR")
 
     def transferir_mercancia(self, origen_id, destino_id, producto_id, cantidad, motivo="Transferencia entre sedes"):
         """Transfiere stock entre almacenes. El impacto neto global es $0, pero mueve valor entre centros de costo."""
         if origen_id == destino_id:
             limpiar_pantalla()
-            print("\n[ERROR] El almacén de origen y destino no pueden ser el mismo.")
+            depurar("El almacén de origen y destino no pueden ser el mismo.", "ERROR")
             return
         if cantidad <= 0:
             limpiar_pantalla()
-            print("\n[ERROR] La cantidad a transferir debe ser mayor a 0.")
+            depurar("La cantidad a transferir debe ser mayor a 0.", "ERROR")
             return
 
         try:
             costo_unit = self._obtener_costo_producto(producto_id)
             self._actualizar_stock_directo(origen_id, producto_id, -cantidad)
             self._actualizar_stock_directo(destino_id, producto_id, cantidad)
-            
+
             fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             valor_trasladado = cantidad * costo_unit
-            
+
             self.cursor.execute('''
-                INSERT INTO movimientos 
+                INSERT INTO movimientos
                 (fecha, tipo, almacen_origen_id, almacen_destino_id, producto_id, cantidad, costo_unitario, impacto_financiero, motivo)
                 VALUES (?, 'TRANSFERENCIA', ?, ?, ?, ?, ?, ?, ?)
             ''', (fecha, origen_id, destino_id, producto_id, cantidad, costo_unit, valor_trasladado, motivo))
 
             self.conn.commit()
             limpiar_pantalla()
-            print(f"\n[OK] Transferencia exitosa de {cantidad} uds (Valor en traslado: ${valor_trasladado:,.2f}).")
+            depurar(f"Transferencia exitosa de {cantidad} uds (Valor en traslado: {dinero(valor_trasladado)}).", "OK")
         except ValueError as e:
             limpiar_pantalla()
             self.conn.rollback()
-            print(f"\n[ERROR EN TRANSFERENCIA] {e}")
+            depurar(f"Error en transferencia: {e}", "ERROR")
         except sqlite3.Error as e:
             limpiar_pantalla()
             self.conn.rollback()
-            print(f"\n[ERROR CRÍTICO] {e}")
+            depurar(f"Error crítico: {e}", "ERROR")
 
     # ==========================================
     # FUNCIONES DE VISUALIZACIÓN Y CONTABILIDAD
     # ==========================================
 
     @staticmethod
-    
     def _imprimir_tabla(encabezados, filas, titulo=""):
-        if titulo:
-            print(f"\n=== {titulo.upper()} ===")
+        """Dibuja la tabla con el mismo estilo del resto del sistema.
+        Cada celda puede ser un valor o una tupla (valor, color)."""
         if not filas:
-            print("  (No hay registros para mostrar)")
+            print()
+            print(mensaje_caja(f"{titulo or 'Tabla'}: no hay registros para mostrar.", "gris"))
             return
 
-        anchos = [len(str(h)) for h in encabezados]
+        celdas = []
         for fila in filas:
-            for i, valor in enumerate(fila):
-                anchos[i] = max(anchos[i], len(str(valor if valor is not None else "N/A")))
+            nueva = []
+            for v in fila:
+                texto, estilo = v if isinstance(v, tuple) else (v, "")
+                nueva.append(("-" if texto is None else str(texto), estilo))
+            celdas.append(nueva)
 
-        linea_sep = "+-" + "-+-".join("-" * w for w in anchos) + "-+"
-        formato_fila = "| " + " | ".join(f"{{:<{w}}}" for w in anchos) + " |"
+        columnas = []
+        for i, enc in enumerate(encabezados):
+            valores = [fila[i][0] for fila in celdas]
+            ancho = min(max([ancho_visual(str(enc))] + [ancho_visual(x) for x in valores]), TOPE_COLUMNA)
+            alinear = "der" if valores and all(_NUMERICO.match(x) for x in valores) else "izq"
+            columnas.append((str(enc), ancho, alinear))
 
-        print(linea_sep)
-        print(formato_fila.format(*encabezados))
-        print(linea_sep)
-        for fila in filas:
-            fila_limpia = [str(v if v is not None else "-") for v in fila]
-            print(formato_fila.format(*fila_limpia))
-        print(linea_sep)
+        print()
+        print(tabla(titulo, columnas, celdas))
 
     def ver_almacenes(self):
         self.cursor.execute("SELECT id, nombre, ubicacion FROM almacenes ORDER BY id")
-        self._imprimir_tabla(["ID", "Nombre Almacén", "Ubicación"], self.cursor.fetchall(), "Catálogo de Almacenes")
+        self._imprimir_tabla(["ID", "Nombre Almacén", "Ubicación"], self.cursor.fetchall(), "Catálogo de almacenes")
 
     def ver_productos(self):
         self.cursor.execute("SELECT id, sku, nombre, printf('$%.2f', costo_unitario), stock_minimo FROM productos ORDER BY id")
-        self._imprimir_tabla(["ID", "SKU", "Producto", "Costo Unit.", "Stock Mínimo"], self.cursor.fetchall(), "Catálogo de Productos")
+        self._imprimir_tabla(["ID", "SKU", "Producto", "Costo Unit.", "Stock Mínimo"], self.cursor.fetchall(), "Catálogo de productos")
 
     def ver_inventario_general(self, almacen_id=None):
         query = '''
-            SELECT a.id, a.nombre, p.sku, p.nombre, i.cantidad, 
+            SELECT a.id, a.nombre, p.sku, p.nombre, i.cantidad,
                    printf('$%.2f', p.costo_unitario),
                    printf('$%.2f', i.cantidad * p.costo_unitario) AS valor_total,
                    CASE WHEN i.cantidad <= p.stock_minimo THEN '¡ALERTA BAJO!' ELSE 'OK' END AS estado
@@ -236,8 +252,9 @@ class SistemaInventario:
         query += " ORDER BY a.nombre, p.nombre"
 
         self.cursor.execute(query, params)
+        filas = [f[:-1] + ((f[-1], "rojo" if "ALERTA" in f[-1] else "verde"),) for f in self.cursor.fetchall()]
         encabezados = ["ID Alm.", "Almacén", "SKU", "Producto", "Stock", "Costo Unit.", "Valor Total", "Estado"]
-        self._imprimir_tabla(encabezados, self.cursor.fetchall(), "Inventario Físico y Valorizado")
+        self._imprimir_tabla(encabezados, filas, "Inventario físico y valorizado")
 
     def ver_alertas_stock_minimo(self):
         query = '''
@@ -251,14 +268,15 @@ class SistemaInventario:
             ORDER BY faltante DESC
         '''
         self.cursor.execute(query)
+        filas = [f[:5] + ((f[5], "rojo" if f[5] > 0 else "amarillo"),) + f[6:] for f in self.cursor.fetchall()]
         encabezados = ["Almacén", "SKU", "Producto", "Stock", "Mínimo", "Déficit", "Costo Reposición Min."]
-        self._imprimir_tabla(encabezados, self.cursor.fetchall(), "Alertas de Stock Mínimo y Presupuesto de Compra")
+        self._imprimir_tabla(encabezados, filas, "Alertas de stock mínimo y presupuesto de compra")
 
     def ver_historial_movimientos(self):
         query = '''
-            SELECT m.id, m.fecha, m.tipo, 
-                   ao.nombre as origen, ad.nombre as destino, 
-                   p.sku, m.cantidad, 
+            SELECT m.id, m.fecha, m.tipo,
+                   ao.nombre as origen, ad.nombre as destino,
+                   p.sku, m.cantidad,
                    printf('$%.2f', m.costo_unitario),
                    printf('$%.2f', m.impacto_financiero),
                    m.motivo
@@ -269,13 +287,14 @@ class SistemaInventario:
             ORDER BY m.id DESC LIMIT 30
         '''
         self.cursor.execute(query)
+        filas = [f[:2] + ((f[2], _COLOR_TIPO.get(f[2], "")),) + f[3:] for f in self.cursor.fetchall()]
         encabezados = ["ID", "Fecha", "Tipo", "Origen", "Destino", "SKU", "Cant.", "Costo U.", "Impacto ($)", "Motivo"]
-        self._imprimir_tabla(encabezados, self.cursor.fetchall(), "Kardex Valorizado (Últimos 30 Movimientos)")
+        self._imprimir_tabla(encabezados, filas, "Kardex valorizado (últimos 30 movimientos)")
 
     def reporte_contable_valor_inventario(self):
         """Genera el resumen de Activo Circulante en inventario por almacén y total empresa."""
         query_almacenes = '''
-            SELECT a.id, a.nombre, 
+            SELECT a.id, a.nombre,
                    COALESCE(SUM(i.cantidad), 0) AS total_unidades,
                    printf('$%.2f', COALESCE(SUM(i.cantidad * p.costo_unitario), 0)) AS valor_almacen
             FROM almacenes a
@@ -286,7 +305,7 @@ class SistemaInventario:
         '''
         self.cursor.execute(query_almacenes)
         encabezados = ["ID Almacén", "Sede / Bodega", "Unidades Totales", "Valor Monetario (Activo)"]
-        self._imprimir_tabla(encabezados, self.cursor.fetchall(), "Balance de Inventario por Centro de Costo")
+        self._imprimir_tabla(encabezados, self.cursor.fetchall(), "Balance de inventario por centro de costo")
 
         # Calcular el gran total de la empresa
         self.cursor.execute('''
@@ -295,12 +314,15 @@ class SistemaInventario:
             JOIN productos p ON i.producto_id = p.id
         ''')
         gran_total = self.cursor.fetchone()[0]
-        print(f"\n  >>> VALOR TOTAL DEL INVENTARIO (ACTIVO CIRCULANTE): ${gran_total:,.2f} <<<")
+        print()
+        panel_kpis("Resumen contable", [
+            ("Valor total del inventario (Activo circulante)", dinero(gran_total), "verde"),
+        ], "verde")
 
     def reporte_contable_mermas(self):
         """Genera el desglose y la sumatoria de pérdidas por mermas para asientos contables."""
         query_mermas = '''
-            SELECT m.id, m.fecha, a.nombre, p.sku, p.nombre, 
+            SELECT m.id, m.fecha, a.nombre, p.sku, p.nombre,
                    ABS(m.cantidad) AS uds_perdidas,
                    printf('$%.2f', m.costo_unitario),
                    printf('$%.2f', ABS(m.impacto_financiero)) AS perdida_monetaria,
@@ -312,8 +334,9 @@ class SistemaInventario:
             ORDER BY m.fecha DESC
         '''
         self.cursor.execute(query_mermas)
+        filas = [f[:7] + ((f[7], "rojo"),) + f[8:] for f in self.cursor.fetchall()]
         encabezados = ["ID Mov.", "Fecha", "Almacén", "SKU", "Producto", "Uds. Perdidas", "Costo Unit.", "Pérdida ($)", "Motivo"]
-        self._imprimir_tabla(encabezados, self.cursor.fetchall(), "Detalle de Mermas y Pérdidas de Inventario")
+        self._imprimir_tabla(encabezados, filas, "Detalle de mermas y pérdidas de inventario")
 
         # Resumen total de pérdidas para el Estado de Resultados
         self.cursor.execute('''
@@ -322,121 +345,139 @@ class SistemaInventario:
             WHERE tipo = 'MERMA'
         ''')
         uds_totales, perdida_total = self.cursor.fetchone()
-        print(f"\n  >>> TOTAL UNIDADES DADAS DE BAJA: {uds_totales} uds.")
-        print(f"  >>> IMPACTO CONTABLE TOTAL POR MERMAS (GASTO/PÉRDIDA): -${perdida_total:,.2f} <<<")
+        print()
+        panel_kpis("Resumen de mermas", [
+            ("Total unidades dadas de baja", f"{uds_totales} uds.", "amarillo"),
+            ("Impacto contable total (gasto / pérdida)", dinero(-perdida_total), "rojo"),
+        ], "rojo")
 
 
 # ==========================================
 # INTERFAZ DE USUARIO EN TERMINAL (MENÚ CLI)
 # ==========================================
-def limpiar_pantalla():
-    os.system('cls' if os.name == 'nt' else 'clear')
-
-
 def pedir_entero(mensaje):
     while True:
         try:
-            return int(input(mensaje))
+            return int(input(marca_prompt() + mensaje))
         except ValueError:
-            print("  [!] Por favor, introduce un número entero válido.")
+            depurar("Por favor, introduce un número entero válido.", "ADVER")
+
 
 def pedir_flotante(mensaje):
     while True:
         try:
-            valor = float(input(mensaje))
+            valor = float(input(marca_prompt() + mensaje))
             if valor < 0:
-                print("  [!] El monto no puede ser negativo.")
+                depurar("El monto no puede ser negativo.", "ADVER")
                 continue
             return valor
         except ValueError:
-            print("  [!] Por favor, introduce un valor numérico válido (ej. 15.50).")
+            depurar("Por favor, introduce un valor numérico válido (ej. 15.50).", "ADVER")
+
+
+def mostrar_menu_multialmacen():
+    encabezado("Multi-Almacén, Logística y Contabilidad")
+    menu_opciones("Sección 1: Añadir y operar", [
+        ("1", "Añadir nuevo Almacén", "verde"),
+        ("2", "Añadir nuevo Producto (con Costo Unitario)", "verde"),
+        ("3", "Ingresar Stock inicial / Ajuste positivo", "amarillo"),
+        ("4", "Registrar Merma / Ajuste negativo (Rotura, pérdida)", "rojo"),
+        ("5", "Programar Transferencia entre Almacenes", "magenta"),
+    ])
+    menu_opciones("Sección 2: Consultas de inventario y logística", [
+        ("6", "Ver tabla de Almacenes", "cyan"),
+        ("7", "Ver tabla de Productos y Costos", "cyan"),
+        ("8", "Ver Inventario Físico y Valorizado", "cyan"),
+        ("9", "Ver ALERTAS de Stock Mínimo (con Presupuesto de Reposición)", "amarillo"),
+        ("10", "Ver Kardex Valorizado (Historial de Movimientos)", "cyan"),
+    ])
+    menu_opciones("Sección 3: Reportes para Contabilidad", [
+        ("11", "Balance de Valoración Total del Inventario (Activo)", "azul"),
+        ("12", "Reporte Financiero de Mermas y Pérdidas (Estado de Resultados)", "rojo"),
+    ])
+    menu_opciones("Salir", [("0", "Volver al Menú Principal", "gris")])
+
 
 def menu_inventario():
     sistema = SistemaInventario()
 
     while True:
-        print("\n" + "="*62)
-        print("   SISTEMA DE GESTIÓN MULTI-ALMACÉN, LOGÍSTICA Y CONTABILIDAD")
-        print("="*62)
-        print(" [SECCIÓN 1: AÑADIR Y OPERAR]")
-        print("  1. Añadir nuevo Almacén")
-        print("  2. Añadir nuevo Producto (con Costo Unitario)")
-        print("  3. Ingresar Stock inicial / Ajuste positivo")
-        print("  4. Registrar Merma / Ajuste negativo (Rotura, pérdida)")
-        print("  5. Programar Transferencia entre Almacenes")
-        print("\n [SECCIÓN 2: CONSULTAS DE INVENTARIO Y LOGÍSTICA]")
-        print("  6. Ver tabla de Almacenes")
-        print("  7. Ver tabla de Productos y Costos")
-        print("  8. Ver Inventario Físico y Valorizado")
-        print("  9. Ver ALERTAS de Stock Mínimo (con Presupuesto de Reposición)")
-        print(" 10. Ver Kardex Valorizado (Historial de Movimientos)")
-        print("\n [SECCIÓN 3: REPORTES PARA MÓDULO DE CONTABILIDAD]")
-        print(" 11. Balance de Valoración Total del Inventario (Activo)")
-        print(" 12. Reporte Financiero de Mermas y Pérdidas (Estado de Resultados)")
-        print("\n  0. Salir del sistema")
-        print("="*62)
+        mostrar_menu_multialmacen()
 
-        opcion = input("Selecciona una opción (0-12): ").strip()
+        opcion = input("\n" + marca_prompt() + "Selecciona una opción (0-12): ").strip()
 
         if opcion == "1":
-            print("\n--- NUEVO ALMACÉN ---")
-            nombre = input("Nombre del almacén (ej. Bodega Central): ")
-            ubicacion = input("Ubicación / Dirección: ")
+            limpiar_pantalla()
+            encabezado("Nuevo almacén")
+            print()
+            nombre = input(marca_prompt() + "Nombre del almacén (ej. Bodega Central): ")
+            ubicacion = input(marca_prompt() + "Ubicación / Dirección: ")
             if nombre and ubicacion:
                 sistema.crear_almacen(nombre, ubicacion)
 
         elif opcion == "2":
-            print("\n--- NUEVO PRODUCTO ---")
-            sku = input("Código SKU (ej. PROD-001): ")
-            nombre = input("Nombre del producto: ")
+            limpiar_pantalla()
+            encabezado("Nuevo producto")
+            print()
+            sku = input(marca_prompt() + "Código SKU (ej. PROD-001): ")
+            nombre = input(marca_prompt() + "Nombre del producto: ")
             costo = pedir_flotante("Costo unitario de adquisición ($): ")
             minimo = pedir_entero("Stock mínimo de seguridad: ")
             if sku and nombre:
                 sistema.crear_producto(sku, nombre, costo, minimo)
 
         elif opcion == "3":
-            print("\n--- INGRESO DE MERCANCÍA / AJUSTE POSITIVO ---")
+            limpiar_pantalla()
+            encabezado("Ingreso de mercancía / ajuste positivo")
             sistema.ver_almacenes()
+            print()
             alm_id = pedir_entero("ID del Almacén donde ingresa: ")
             sistema.ver_productos()
+            print()
             prod_id = pedir_entero("ID del Producto: ")
             cant = pedir_entero("Cantidad a sumar (mayor a 0): ")
-            motivo = input("Motivo (ej. Factura Compra #102, Inventario inicial): ") or "Ingreso de stock"
+            motivo = input(marca_prompt() + "Motivo (ej. Factura Compra #102, Inventario inicial): ") or "Ingreso de stock"
             if cant > 0:
                 sistema.registrar_ajuste_o_merma(alm_id, prod_id, cant, "INGRESO", motivo)
             else:
-                print("\n[!] La cantidad debe ser positiva.")
+                print()
+                depurar("La cantidad debe ser positiva.", "ADVER")
 
         elif opcion == "4":
-            print("\n--- REGISTRO DE MERMA O PÉRDIDA ---")
+            limpiar_pantalla()
+            encabezado("Registro de merma o pérdida")
             sistema.ver_almacenes()
+            print()
             alm_id = pedir_entero("ID del Almacén afectado: ")
             sistema.ver_inventario_general(alm_id)
+            print()
             prod_id = pedir_entero("ID del Producto afectado: ")
             cant = pedir_entero("Cantidad perdida/dañada (introduce número positivo): ")
             if cant > 0:
                 sistema.registrar_ajuste_o_merma(alm_id, prod_id, -cant, "MERMA", motivo)
-                motivo = input("Causa de la merma (ej. Caducidad, Daño en almacén): ") or "Merma sin especificar"
+                motivo = input(marca_prompt() + "Causa de la merma (ej. Caducidad, Daño en almacén): ") or "Merma sin especificar"
             else:
                 limpiar_pantalla()
-                print("\n[!] La cantidad debe ser mayor a 0.")
+                depurar("La cantidad debe ser mayor a 0.", "ADVER")
 
         elif opcion == "5":
             limpiar_pantalla()
-            print("\n--- TRANSFERENCIA ENTRE ALMACENES ---")
+            encabezado("Transferencia entre almacenes")
             sistema.ver_almacenes()
+            print()
             origen = pedir_entero("ID del Almacén de ORIGEN: ")
             destino = pedir_entero("ID del Almacén de DESTINO: ")
             sistema.ver_inventario_general(origen)
+            print()
             prod_id = pedir_entero("ID del Producto a transferir: ")
-            
+
             cant = pedir_entero("Cantidad a transferir: ")
-            if cant >0:
-                motivo = input("Guía de remisión / Motivo: ") or "Reabastecimiento interno"
+            if cant > 0:
+                motivo = input(marca_prompt() + "Guía de remisión / Motivo: ") or "Reabastecimiento interno"
                 sistema.transferir_mercancia(origen, destino, prod_id, cant, motivo)
             else:
                 limpiar_pantalla()
-                print("\n[!] La cantidad debe ser mayor a 0.")
+                depurar("La cantidad debe ser mayor a 0.", "ADVER")
 
         elif opcion == "6":
             limpiar_pantalla()
@@ -448,11 +489,12 @@ def menu_inventario():
 
         elif opcion == "8":
             limpiar_pantalla()
-            sub = input("¿Deseas filtrar por un almacén específico? (s/n): ").strip().lower()
-            
+            sub = input(marca_prompt() + "¿Deseas filtrar por un almacén específico? (s/n): ").strip().lower()
+
             if sub == 's':
                 limpiar_pantalla()
                 sistema.ver_almacenes()
+                print()
                 alm_id = pedir_entero("Ingresa el ID del almacén: ")
                 sistema.ver_inventario_general(alm_id)
             else:
@@ -462,34 +504,31 @@ def menu_inventario():
         elif opcion == "9":
             limpiar_pantalla()
             sistema.ver_alertas_stock_minimo()
-            
 
         elif opcion == "10":
             limpiar_pantalla()
             sistema.ver_historial_movimientos()
-            
 
         elif opcion == "11":
             limpiar_pantalla()
             sistema.reporte_contable_valor_inventario()
-            
 
         elif opcion == "12":
             limpiar_pantalla()
             sistema.reporte_contable_mermas()
-            
 
         elif opcion == "0":
             limpiar_pantalla()
-            print("\nCerrando conexión y saliendo del sistema...")
+            depurar("Cerrando conexión y volviendo al Menú Principal...", "INFO")
             sistema.conn.close()
             break
         else:
             limpiar_pantalla()
-            print("\n[!] Opción no válida. Intenta de nuevo.")
-            
-        input("\nPresiona ENTER para volver al menú...")
+            depurar("Opción no válida. Intenta de nuevo.", "ADVER")
+
+        pausar()
         limpiar_pantalla()
+
 
 if __name__ == "__main__":
     menu_inventario()
