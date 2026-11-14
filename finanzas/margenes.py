@@ -1,90 +1,107 @@
-from finanzas.periodo import limpiar_pantalla, pausar, verificar_salida, VolverAlMenuException, depurar
-from finanzas.inventario import SistemaInventario
+import math
 
-def obtener_tabla_inventario(db, titulo="📦 Productos disponibles en inventario:"):
+from finanzas.periodo import (
+    limpiar_pantalla, pausar, verificar_salida, VolverAlMenuException, depurar,
+    encabezado, menu_opciones, tabla, mensaje_caja, dinero, marca_prompt,
+    a_entero, es_si, validar_texto, LIMITE_NUMERICO,
+)
+
+def obtener_tabla_inventario(db, titulo="Productos disponibles en inventario:"):
     inventario = db.get("inventario", {})
     if not inventario:
-        return "⚠️ El inventario está actualmente vacío."
-    lineas = [
-        titulo,
-        "-" * 65,
-        f"{'COD':<6} {'NOMBRE':<22} {'CATEGORÍA':<12} {'STOCK':<6} {'PRECIO':<8}",
-        "-" * 65
-    ]
+        return mensaje_caja("El inventario está actualmente vacío.")
+    filas = []
     for cod, p in inventario.items():
-        nombre = p['nombre'][:20]
-        cat = p.get('categoria', 'General')[:10]
-        stock = p['stock']
-        precio = p['precio']
-        lineas.append(f" {cod:<5} {nombre:<22} {cat:<12} {stock:<6} ${precio:<7.2f}")
-    lineas.append("-" * 65)
-    return "\n".join(lineas)
+        stock = p.get("stock", 0)
+        bajo = stock <= p.get("stock_min", 5)
+        filas.append((cod, p.get("nombre", "?"), p.get("categoria", "General"),
+                      (str(stock), "rojo" if bajo else "verde"), dinero(p.get("precio", 0))))
+    return tabla(titulo, [("COD", 6, "izq"), ("NOMBRE", 20, "izq"), ("CATEGORÍA", 12, "izq"),
+                          ("STOCK", 6, "der"), ("PRECIO", 10, "der")], filas)
 
-def obtener_tabla_clientes(db, titulo="📋 Clientes registrados:"):
+def obtener_tabla_clientes(db, titulo="Clientes registrados:"):
     clientes = db.get("clientes", {})
     if not clientes:
-        return "⚠️ No hay clientes registrados (se asignará 'Consumidor Final' si deja en blanco)."
-    lineas = [
-        titulo,
-        "-" * 65,
-        f"{'ID / RIF':<15} {'NOMBRE':<22} {'TELÉFONO':<15} {'COMPRAS':<8}",
-        "-" * 65
-    ]
+        return mensaje_caja("No hay clientes registrados (se asignará 'Consumidor Final' si deja en blanco).")
+    filas = []
     for id_c, c in clientes.items():
-        nombre = c['nombre'][:20]
-        tel = c.get('telefono', 'N/A')[:14]
-        compras = c.get('compras', 0)
-        lineas.append(f" {id_c:<14} {nombre:<22} {tel:<15} {compras:<8}")
-    lineas.append("-" * 65)
-    return "\n".join(lineas)
+        filas.append((id_c, c.get("nombre", "?"), c.get("telefono", "N/A"), str(c.get("compras", 0))))
+    return tabla(titulo, [("ID / RIF", 14, "izq"), ("NOMBRE", 20, "izq"),
+                          ("TELÉFONO", 14, "izq"), ("COMPRAS", 8, "der")], filas)
 
-def solicitar_con_aviso(mensaje, validador_tipo=str, permitir_vacio=False, header_extra=None):
+def solicitar_con_aviso(mensaje, validador_tipo=str, permitir_vacio=False, header_extra=None, minimo=None):
+    problema = None
     while True:
         limpiar_pantalla()
-        print("=== SISTEMA DE GESTIÓN EMPRESARIAL ===")
-        print("(Escriba '0' o 'salir' en cualquier momento para volver al menú)\n")
+        encabezado("Escriba '0' o 'salir' en cualquier momento para volver al menú")
         if header_extra:
             print(header_extra)
             print()
-        entrada = input(mensaje).strip()
+        if problema:
+            depurar(problema, "ADVER")   # El error se ve encima de la pregunta, sin pedir otro Enter
+            print()
+        entrada = input(marca_prompt() + mensaje).strip()
         verificar_salida(entrada)
-        if not permitir_vacio and not entrada:
-            depurar("Este campo no puede estar vacío.", "ADVER")
-            input("Presiona [Enter] para intentar de nuevo...")
+        if not entrada:
+            if permitir_vacio:
+                return ""
+            problema = "Este campo no puede estar vacío."
             continue
-        if permitir_vacio and not entrada:
-            return ""
         try:
-            if validador_tipo == int:
-                return int(entrada)
-            elif validador_tipo == float:
-                return float(entrada)
+            if validador_tipo in (int, float):
+                if "_" in entrada:
+                    raise ValueError("Python acepta '_' en números; aquí no.")
+                if validador_tipo == int:
+                    valor = int(entrada)
+                else:
+                    if "," in entrada and "." not in entrada:
+                        entrada = entrada.replace(",", ".")   # Acepta 15,50 además de 15.50
+                    valor = float(entrada)
+                    if not math.isfinite(valor):              # Rechaza nan e inf
+                        raise ValueError("Valor no finito.")
             else:
-                return str(entrada)
+                error_texto = validar_texto(entrada)
+                if error_texto:
+                    problema = error_texto
+                    continue
+                return " ".join(entrada.split())              # Quita espacios repetidos
         except ValueError:
             tipo_nombre = "un número entero válido" if validador_tipo == int else "un número válido (ej. 15.50)"
-            depurar(f"Por favor, ingrese {tipo_nombre}.", "ADVER")
-            input("Presiona [Enter] para intentar de nuevo...")
+            problema = f"Por favor, ingrese {tipo_nombre}."
+            continue
+        if abs(valor) > LIMITE_NUMERICO:
+            problema = f"El valor es demasiado grande (máximo {LIMITE_NUMERICO:,})."
+            continue
+        if minimo is not None and valor < minimo:
+            problema = f"El valor debe ser mayor o igual a {minimo}."
+            continue
+        return valor
 
 def seleccionar_o_crear_categoria(db, tipo="productos"):
+    problema = None
     while True:
         limpiar_pantalla()
-        print(f"=== SELECCIÓN DE CATEGORÍA DE {'PRODUCTOS' if tipo=='productos' else 'GASTOS'} ===")
-        print("(Escriba '0' o 'salir' para volver al menú)\n")
         key = "categorias" if tipo == "productos" else "categorias_gastos"
         default_vals = ["General", "Víveres", "Limpieza", "Bebidas"] if tipo == "productos" else ["Operativo", "Administrativo", "Mercancía", "Servicios"]
         categorias = db.get(key, default_vals)
-        for i, cat in enumerate(categorias, 1):
-            print(f"{i}. {cat}")
-        print(f"{len(categorias) + 1}. [Crear una nueva categoría]")
-        print("0. Volver al Menú Principal")
-        
+        opciones = [(str(i), cat, "amarillo") for i, cat in enumerate(categorias, 1)]
+        opciones.append((str(len(categorias) + 1), "[Crear una nueva categoría]", "verde"))
+        opciones.append(("0", "Volver al Menú Principal", "gris"))
+        encabezado("Escriba '0' o 'salir' para volver al menú")
+        menu_opciones(f"Categorías de {'productos' if tipo == 'productos' else 'gastos'}", opciones)
+        if problema:
+            depurar(problema, "ADVER")
+            problema = None
         opcion_input = input("\nSeleccione una opción o escriba el nombre de una nueva categoría: ").strip()
         verificar_salida(opcion_input)
         if opcion_input == "0":
             raise VolverAlMenuException()
         if opcion_input.isdigit():
-            idx = int(opcion_input) - 1
+            numero = a_entero(opcion_input)       # '²' es "dígito" para Python pero no es un número válido
+            if numero is None:
+                problema = "Opción inválida. Escriba un número de la lista."
+                continue
+            idx = numero - 1
             if 0 <= idx < len(categorias):
                 return categorias[idx]
             elif idx == len(categorias):
@@ -98,9 +115,17 @@ def seleccionar_o_crear_categoria(db, tipo="productos"):
                     categorias.append(nueva_cat)
                     db[key] = categorias
                 return nueva_cat
+            else:
+                problema = f"La opción {numero} no está en la lista."
+                continue
         else:
-            nueva_cat = opcion_input.title()
+            nueva_cat = " ".join(opcion_input.split()).title()
             if not nueva_cat:
+                problema = "Escriba un número de la lista o el nombre de una categoría."
+                continue
+            error_texto = validar_texto(nueva_cat, 30)
+            if error_texto:
+                problema = error_texto
                 continue
             if nueva_cat not in categorias:
                 categorias.append(nueva_cat)
@@ -108,11 +133,11 @@ def seleccionar_o_crear_categoria(db, tipo="productos"):
             return nueva_cat
 
 def agregar_producto(db):
-    header_text = obtener_tabla_inventario(db, "📦 Inventario actual (para referencia de códigos):")
+    header_text = obtener_tabla_inventario(db, "Inventario actual (para referencia de códigos):")
     codigo = solicitar_con_aviso("Código del producto [Ej: P001]: ", header_extra=header_text).upper()
     if codigo in db["inventario"]:
         limpiar_pantalla()
-        print("\n--- ACTUALIZAR STOCK ---")
+        encabezado("Actualizar stock")
         cant = solicitar_con_aviso(f"Producto existente ({db['inventario'][codigo]['nombre']}). Cantidad a sumar [Ej: 5]: ", int)
         if cant > 0:
             db["inventario"][codigo]["stock"] += cant
@@ -123,10 +148,10 @@ def agregar_producto(db):
         return
     nombre = solicitar_con_aviso("Nombre del producto [Ej: Café Molido 500g]: ")
     categoria = seleccionar_o_crear_categoria(db, tipo="productos")
-    costo = solicitar_con_aviso("Costo unitario de compra ($) [Ej: 3.50]: ", float)
-    precio = solicitar_con_aviso("Precio unitario de venta ($) [Ej: 5.00]: ", float)
-    stock = solicitar_con_aviso("Stock inicial [Ej: 20]: ", int)
-    stock_min = solicitar_con_aviso("Stock mínimo para alerta [Ej: 5]: ", int)
+    costo = solicitar_con_aviso("Costo unitario de compra ($) [Ej: 3.50]: ", float, minimo=0)
+    precio = solicitar_con_aviso("Precio unitario de venta ($) [Ej: 5.00]: ", float, minimo=0)
+    stock = solicitar_con_aviso("Stock inicial [Ej: 20]: ", int, minimo=0)
+    stock_min = solicitar_con_aviso("Stock mínimo para alerta [Ej: 5]: ", int, minimo=0)
     db["inventario"][codigo] = {
         "nombre": nombre, "categoria": categoria,
         "costo": costo, "precio": precio,
@@ -142,7 +167,7 @@ def eliminar_producto(db):
         depurar("No hay productos registrados en el inventario.", "ADVER")
         pausar()
         return
-    header_text = obtener_tabla_inventario(db, "🗑️ Seleccione el producto a eliminar:")
+    header_text = obtener_tabla_inventario(db, "Seleccione el producto a eliminar:")
     codigo = solicitar_con_aviso("Ingrese el código exacto del producto a eliminar: ", header_extra=header_text).upper()
     if codigo not in db["inventario"]:
         limpiar_pantalla()
@@ -151,11 +176,11 @@ def eliminar_producto(db):
         return
     prod = db["inventario"][codigo]
     limpiar_pantalla()
-    print("=== ELIMINAR PRODUCTO ===")
+    encabezado("Eliminar producto")
     print(f"\nProducto seleccionado: {prod['nombre']} (Código: {codigo})")
     confirmacion = input("\n¿Estás seguro de eliminar este producto permanentemente? (s/n): ").strip().lower()
     verificar_salida(confirmacion)
-    if confirmacion == 's':
+    if es_si(confirmacion):
         del db["inventario"][codigo]
         limpiar_pantalla()
         depurar(f"Producto '{prod['nombre']}' eliminado con éxito.", "OK")
@@ -166,22 +191,22 @@ def eliminar_producto(db):
 
 def eliminar_categoria(db):
     limpiar_pantalla()
-    print("=== ELIMINAR CATEGORÍA DE PRODUCTOS ===")
     categorias = db.get("categorias", ["General"])
     if len(categorias) <= 1:
+        encabezado("Eliminar categoría de productos")
         depurar("No es posible eliminar todas las categorías. Debe existir al menos una ('General').", "ADVER")
         pausar()
         return
-    print("Categorías disponibles:")
-    for i, cat in enumerate(categorias, 1):
-        print(f"{i}. {cat}")
+    encabezado("Eliminar categoría de productos")
+    menu_opciones("Categorías disponibles", [(str(i), cat, "amarillo") for i, cat in enumerate(categorias, 1)])
     opcion = input("\nSeleccione el número de la categoría que desea eliminar: ").strip()
     verificar_salida(opcion)
-    if not opcion.isdigit():
+    numero = a_entero(opcion)
+    if numero is None:
         depurar("Operación cancelada.", "INFO")
         pausar()
         return
-    idx = int(opcion) - 1
+    idx = numero - 1
     if not (0 <= idx < len(categorias)):
         depurar("Opción inválida.", "ADVER")
         pausar()
@@ -193,7 +218,7 @@ def eliminar_categoria(db):
         return
     confirmacion = input(f"\n¿Estás seguro de eliminar la categoría '{cat_a_eliminar}'? (s/n): ").strip().lower()
     verificar_salida(confirmacion)
-    if confirmacion == 's':
+    if es_si(confirmacion):
         categorias.pop(idx)
         db["categorias"] = categorias
         for p in db.get("inventario", {}).values():
@@ -205,7 +230,6 @@ def eliminar_categoria(db):
 
 def agregar_nueva_categoria(db):
     limpiar_pantalla()
-    print("=== AGREGAR NUEVA CATEGORÍA DE PRODUCTOS ===")
     nueva_cat = solicitar_con_aviso("Nombre de la nueva categoría: ").strip().title()
     if not nueva_cat:
         return
@@ -220,185 +244,62 @@ def agregar_nueva_categoria(db):
 
 def ver_productos_por_categoria(db):
     limpiar_pantalla()
-    print("=== INVENTARIO CLASIFICADO POR CATEGORÍAS ===")
+    encabezado("Inventario clasificado por categorías")
     categorias = db.get("categorias", ["General"])
     inventario = db.get("inventario", {})
     if not inventario:
-        print("El inventario está vacío.")
+        print()
+        print(mensaje_caja("El inventario está vacío."))
     else:
+        hay_alerta = False
         for cat in categorias:
-            print(f"\n📁 Categoría: {cat.upper()}")
-            prods = [p for p in inventario.values() if p.get("categoria", "General") == cat]
+            print()
+            prods = [(cod, p) for cod, p in inventario.items() if p.get("categoria", "General") == cat]
             if not prods:
-                print("   (Sin productos)")
-            else:
-                for cod, p in inventario.items():
-                    if p.get("categoria", "General") == cat:
-                        alerta = " [¡STOCK BAJO!]" if p["stock"] <= p.get("stock_min", 5) else ""
-                        print(f"   - [{cod}] {p['nombre']} | Stock: {p['stock']} | Costo: ${p['costo']:.2f} | Venta: ${p['precio']:.2f}{alerta}")
-    pausar()
-
-def pedir_entero(mensaje):
-    while True:
-        try:
-            return int(input(mensaje))
-        except ValueError:
-            print("  [!] Por favor, introduce un número entero válido.")
-
-def pedir_flotante(mensaje):
-    while True:
-        try:
-            valor = float(input(mensaje))
-            if valor < 0:
-                print("  [!] El monto no puede ser negativo.")
+                print(mensaje_caja(f"Categoría {cat.upper()}: sin productos.", "gris"))
                 continue
-            return valor
-        except ValueError:
-            print("  [!] Por favor, introduce un valor numérico válido (ej. 15.50).")
-
-def ejecutar_menu_sqlite_integrado(sistema):
-    """Submenú de operaciones avanzadas de almacenes, costos y kardex (SQLite)."""
-    while True:
-        limpiar_pantalla()
-        print("="*62)
-        print("   GESTIÓN AVANZADA DE ALMACENES, LOGÍSTICA Y KARDEX")
-        print("="*62)
-        print(" [OPERACIONES]")
-        print("  1. Añadir nuevo Almacén")
-        print("  2. Añadir nuevo Producto (con Costo Unitario)")
-        print("  3. Ingresar Stock inicial / Ajuste positivo")
-        print("  4. Registrar Merma / Ajuste negativo (Rotura, pérdida)")
-        print("  5. Transferir Mercancía entre Almacenes")
-        print("\n [CONSULTAS Y REPORTES]")
-        print("  6. Ver tabla de Almacenes")
-        print("  7. Ver Inventario Físico y Valorizado")
-        print("  8. Ver ALERTAS de Stock Mínimo")
-        print("  9. Ver Kardex Valorizado (Historial)")
-        print(" 10. Balance de Valoración Total (Activo)")
-        print(" 11. Reporte Financiero de Mermas (Pérdidas)")
-        print("\n  0. Volver al Menú de Inventario")
-        print("="*62)
-
-        opcion = input("Selecciona una opción (0-11): ").strip()
-
-        if opcion == "1":
-            limpiar_pantalla()
-            print("\n--- NUEVO ALMACÉN ---")
-            nombre = input("Nombre del almacén (ej. Bodega Central): ")
-            ubicacion = input("Ubicación / Dirección: ")
-            if nombre and ubicacion:
-                sistema.crear_almacen(nombre, ubicacion)
-        elif opcion == "2":
-            limpiar_pantalla()
-            print("\n--- NUEVO PRODUCTO ---")
-            sku = input("Código SKU (ej. PROD-001): ")
-            nombre = input("Nombre del producto: ")
-            costo = pedir_flotante("Costo unitario de adquisición ($): ")
-            minimo = pedir_entero("Stock mínimo de seguridad: ")
-            if sku and nombre:
-                sistema.crear_producto(sku, nombre, costo, minimo)
-        elif opcion == "3":
-            limpiar_pantalla()
-            print("\n--- INGRESO DE MERCANCÍA / AJUSTE POSITIVO ---")
-            sistema.ver_almacenes()
-            alm_id = pedir_entero("ID del Almacén donde ingresa: ")
-            sistema.ver_productos()
-            prod_id = pedir_entero("ID del Producto: ")
-            cant = pedir_entero("Cantidad a sumar (mayor a 0): ")
-            motivo = input("Motivo (ej. Factura Compra #102): ") or "Ingreso de stock"
-            if cant > 0:
-                sistema.registrar_ajuste_o_merma(alm_id, prod_id, cant, "INGRESO", motivo)
-        elif opcion == "4":
-            limpiar_pantalla()
-            print("\n--- REGISTRO DE MERMA O PÉRDIDA ---")
-            sistema.ver_almacenes()
-            alm_id = pedir_entero("ID del Almacén afectado: ")
-            sistema.ver_inventario_general(alm_id)
-            prod_id = pedir_entero("ID del Producto afectado: ")
-            cant = pedir_entero("Cantidad perdida/dañada (número positivo): ")
-            motivo = input("Causa de la merma (ej. Caducidad, Daño): ") or "Merma sin especificar"
-            if cant > 0:
-                sistema.registrar_ajuste_o_merma(alm_id, prod_id, -cant, "MERMA", motivo)
-        elif opcion == "5":
-            limpiar_pantalla()
-            print("\n--- TRANSFERENCIA ENTRE ALMACENES ---")
-            sistema.ver_almacenes()
-            origen = pedir_entero("ID del Almacén de ORIGEN: ")
-            destino = pedir_entero("ID del Almacén de DESTINO: ")
-            sistema.ver_inventario_general(origen)
-            prod_id = pedir_entero("ID del Producto a transferir: ")
-            cant = pedir_entero("Cantidad a transferir: ")
-            if cant > 0:
-                motivo = input("Motivo: ") or "Reabastecimiento interno"
-                sistema.transferir_mercancia(origen, destino, prod_id, cant, motivo)
-        elif opcion == "6":
-            limpiar_pantalla()
-            sistema.ver_almacenes()
-        elif opcion == "7":
-            limpiar_pantalla()
-            sistema.ver_inventario_general()
-        elif opcion == "8":
-            limpiar_pantalla()
-            sistema.ver_alertas_stock_minimo()
-        elif opcion == "9":
-            limpiar_pantalla()
-            sistema.ver_historial_movimientos()
-        elif opcion == "10":
-            limpiar_pantalla()
-            sistema.reporte_contable_valor_inventario()
-        elif opcion == "11":
-            limpiar_pantalla()
-            sistema.reporte_contable_mermas()
-        elif opcion == "0":
-            break
-        else:
-            print("\n[!] Opción no válida.")
-        
-        input("\nPresiona ENTER para continuar...")
+            filas = []
+            for cod, p in prods:
+                bajo = p["stock"] <= p.get("stock_min", 5)
+                hay_alerta = hay_alerta or bajo
+                filas.append((cod, p["nombre"], (f"{p['stock']}{' !' if bajo else ''}", "rojo" if bajo else "verde"),
+                              dinero(p.get("costo", 0)), dinero(p.get("precio", 0))))
+            print(tabla(f"Categoría: {cat.upper()}",
+                        [("COD", 6, "izq"), ("NOMBRE", 20, "izq"), ("STOCK", 7, "der"),
+                         ("COSTO", 10, "der"), ("VENTA", 10, "der")], filas))
+        if hay_alerta:
+            print("\n ! = stock bajo (igual o menor al mínimo de alerta)")
+    pausar()
 
 def menu_inventario(gestor):
     from base import TransaccionDB
-    sistema_sqlite = SistemaInventario()
-
     while True:
+        db = gestor.cargar()
         limpiar_pantalla()
-        print("=== GESTIÓN DE INVENTARIO ===")
-        print("1. Ver Inventario por Categorías")
-        print("2. Agregar Nueva Categoría de Productos")
-        print("3. Eliminar Producto o Categoría")
-        print("4. Gestión Avanzada (Multi-Almacén, Stock y Kardex)")
-        print("5. Volver al Menú Principal")
+        encabezado("Gestión de inventario")
+        menu_opciones("Opciones", [
+            ("1", "Ver Inventario por Categoría", "cyan"),
+            ("2", "Agregar Nueva Categoría de Productos", "verde"),
+            ("3", "Eliminar Producto", "rojo"),
+            ("4", "Eliminar Categoría de Productos", "rojo"),
+            ("5", "Volver al Menú Principal", "gris"),
+        ])
         
         op = input("\nSeleccione una opción [Ej: 1]: ").strip()
         verificar_salida(op)
         
         if op == "1":
-            db = gestor.cargar()
             ver_productos_por_categoria(db)
         elif op == "2":
             with TransaccionDB(gestor) as db_trans:
                 agregar_nueva_categoria(db_trans)
         elif op == "3":
-            while True:
-                limpiar_pantalla()
-                print("=== ELIMINAR EN INVENTARIO (JSON) ===")
-                print("1. Eliminar Producto")
-                print("2. Eliminar Categoría")
-                print("3. Volver")
-                sub_op = input("Seleccione: ").strip()
-                verificar_salida(sub_op)
-                if sub_op == "1":
-                    with TransaccionDB(gestor) as db_trans:
-                        eliminar_producto(db_trans)
-                elif sub_op == "2":
-                    with TransaccionDB(gestor) as db_trans:
-                        eliminar_categoria(db_trans)
-                elif sub_op == "3":
-                    break
+            with TransaccionDB(gestor) as db_trans:
+                eliminar_producto(db_trans)
         elif op == "4":
-            ejecutar_menu_sqlite_integrado(sistema_sqlite)
+            with TransaccionDB(gestor) as db_trans:
+                eliminar_categoria(db_trans)
         elif op == "5":
-            sistema_sqlite.conn.close()
             break
         else:
             depurar("Opción no válida en el menú de inventario.", "ADVER")
