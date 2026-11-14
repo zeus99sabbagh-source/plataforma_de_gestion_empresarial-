@@ -1,4 +1,5 @@
 from finanzas.periodo import limpiar_pantalla, pausar, verificar_salida, VolverAlMenuException, depurar
+from finanzas.inventario import SistemaInventario
 
 def obtener_tabla_inventario(db, titulo="📦 Productos disponibles en inventario:"):
     inventario = db.get("inventario", {})
@@ -237,33 +238,167 @@ def ver_productos_por_categoria(db):
                         print(f"   - [{cod}] {p['nombre']} | Stock: {p['stock']} | Costo: ${p['costo']:.2f} | Venta: ${p['precio']:.2f}{alerta}")
     pausar()
 
+def pedir_entero(mensaje):
+    while True:
+        try:
+            return int(input(mensaje))
+        except ValueError:
+            print("  [!] Por favor, introduce un número entero válido.")
+
+def pedir_flotante(mensaje):
+    while True:
+        try:
+            valor = float(input(mensaje))
+            if valor < 0:
+                print("  [!] El monto no puede ser negativo.")
+                continue
+            return valor
+        except ValueError:
+            print("  [!] Por favor, introduce un valor numérico válido (ej. 15.50).")
+
+def ejecutar_menu_sqlite_integrado(sistema):
+    """Submenú de operaciones avanzadas de almacenes, costos y kardex (SQLite)."""
+    while True:
+        limpiar_pantalla()
+        print("="*62)
+        print("   GESTIÓN AVANZADA DE ALMACENES, LOGÍSTICA Y KARDEX")
+        print("="*62)
+        print(" [OPERACIONES]")
+        print("  1. Añadir nuevo Almacén")
+        print("  2. Añadir nuevo Producto (con Costo Unitario)")
+        print("  3. Ingresar Stock inicial / Ajuste positivo")
+        print("  4. Registrar Merma / Ajuste negativo (Rotura, pérdida)")
+        print("  5. Transferir Mercancía entre Almacenes")
+        print("\n [CONSULTAS Y REPORTES]")
+        print("  6. Ver tabla de Almacenes")
+        print("  7. Ver Inventario Físico y Valorizado")
+        print("  8. Ver ALERTAS de Stock Mínimo")
+        print("  9. Ver Kardex Valorizado (Historial)")
+        print(" 10. Balance de Valoración Total (Activo)")
+        print(" 11. Reporte Financiero de Mermas (Pérdidas)")
+        print("\n  0. Volver al Menú de Inventario")
+        print("="*62)
+
+        opcion = input("Selecciona una opción (0-11): ").strip()
+
+        if opcion == "1":
+            limpiar_pantalla()
+            print("\n--- NUEVO ALMACÉN ---")
+            nombre = input("Nombre del almacén (ej. Bodega Central): ")
+            ubicacion = input("Ubicación / Dirección: ")
+            if nombre and ubicacion:
+                sistema.crear_almacen(nombre, ubicacion)
+        elif opcion == "2":
+            limpiar_pantalla()
+            print("\n--- NUEVO PRODUCTO ---")
+            sku = input("Código SKU (ej. PROD-001): ")
+            nombre = input("Nombre del producto: ")
+            costo = pedir_flotante("Costo unitario de adquisición ($): ")
+            minimo = pedir_entero("Stock mínimo de seguridad: ")
+            if sku and nombre:
+                sistema.crear_producto(sku, nombre, costo, minimo)
+        elif opcion == "3":
+            limpiar_pantalla()
+            print("\n--- INGRESO DE MERCANCÍA / AJUSTE POSITIVO ---")
+            sistema.ver_almacenes()
+            alm_id = pedir_entero("ID del Almacén donde ingresa: ")
+            sistema.ver_productos()
+            prod_id = pedir_entero("ID del Producto: ")
+            cant = pedir_entero("Cantidad a sumar (mayor a 0): ")
+            motivo = input("Motivo (ej. Factura Compra #102): ") or "Ingreso de stock"
+            if cant > 0:
+                sistema.registrar_ajuste_o_merma(alm_id, prod_id, cant, "INGRESO", motivo)
+        elif opcion == "4":
+            limpiar_pantalla()
+            print("\n--- REGISTRO DE MERMA O PÉRDIDA ---")
+            sistema.ver_almacenes()
+            alm_id = pedir_entero("ID del Almacén afectado: ")
+            sistema.ver_inventario_general(alm_id)
+            prod_id = pedir_entero("ID del Producto afectado: ")
+            cant = pedir_entero("Cantidad perdida/dañada (número positivo): ")
+            motivo = input("Causa de la merma (ej. Caducidad, Daño): ") or "Merma sin especificar"
+            if cant > 0:
+                sistema.registrar_ajuste_o_merma(alm_id, prod_id, -cant, "MERMA", motivo)
+        elif opcion == "5":
+            limpiar_pantalla()
+            print("\n--- TRANSFERENCIA ENTRE ALMACENES ---")
+            sistema.ver_almacenes()
+            origen = pedir_entero("ID del Almacén de ORIGEN: ")
+            destino = pedir_entero("ID del Almacén de DESTINO: ")
+            sistema.ver_inventario_general(origen)
+            prod_id = pedir_entero("ID del Producto a transferir: ")
+            cant = pedir_entero("Cantidad a transferir: ")
+            if cant > 0:
+                motivo = input("Motivo: ") or "Reabastecimiento interno"
+                sistema.transferir_mercancia(origen, destino, prod_id, cant, motivo)
+        elif opcion == "6":
+            limpiar_pantalla()
+            sistema.ver_almacenes()
+        elif opcion == "7":
+            limpiar_pantalla()
+            sistema.ver_inventario_general()
+        elif opcion == "8":
+            limpiar_pantalla()
+            sistema.ver_alertas_stock_minimo()
+        elif opcion == "9":
+            limpiar_pantalla()
+            sistema.ver_historial_movimientos()
+        elif opcion == "10":
+            limpiar_pantalla()
+            sistema.reporte_contable_valor_inventario()
+        elif opcion == "11":
+            limpiar_pantalla()
+            sistema.reporte_contable_mermas()
+        elif opcion == "0":
+            break
+        else:
+            print("\n[!] Opción no válida.")
+        
+        input("\nPresiona ENTER para continuar...")
+
 def menu_inventario(gestor):
     from base import TransaccionDB
+    sistema_sqlite = SistemaInventario()
+
     while True:
-        db = gestor.cargar()
         limpiar_pantalla()
         print("=== GESTIÓN DE INVENTARIO ===")
-        print("1. Ver Inventario por Categoría")
+        print("1. Ver Inventario por Categorías")
         print("2. Agregar Nueva Categoría de Productos")
-        print("3. Eliminar Producto")
-        print("4. Eliminar Categoría de Productos")
+        print("3. Eliminar Producto o Categoría")
+        print("4. Gestión Avanzada (Multi-Almacén, Stock y Kardex)")
         print("5. Volver al Menú Principal")
         
         op = input("\nSeleccione una opción [Ej: 1]: ").strip()
         verificar_salida(op)
         
         if op == "1":
+            db = gestor.cargar()
             ver_productos_por_categoria(db)
         elif op == "2":
             with TransaccionDB(gestor) as db_trans:
                 agregar_nueva_categoria(db_trans)
         elif op == "3":
-            with TransaccionDB(gestor) as db_trans:
-                eliminar_producto(db_trans)
+            while True:
+                limpiar_pantalla()
+                print("=== ELIMINAR EN INVENTARIO (JSON) ===")
+                print("1. Eliminar Producto")
+                print("2. Eliminar Categoría")
+                print("3. Volver")
+                sub_op = input("Seleccione: ").strip()
+                verificar_salida(sub_op)
+                if sub_op == "1":
+                    with TransaccionDB(gestor) as db_trans:
+                        eliminar_producto(db_trans)
+                elif sub_op == "2":
+                    with TransaccionDB(gestor) as db_trans:
+                        eliminar_categoria(db_trans)
+                elif sub_op == "3":
+                    break
         elif op == "4":
-            with TransaccionDB(gestor) as db_trans:
-                eliminar_categoria(db_trans)
+            ejecutar_menu_sqlite_integrado(sistema_sqlite)
         elif op == "5":
+            sistema_sqlite.conn.close()
             break
         else:
             depurar("Opción no válida en el menú de inventario.", "ADVER")

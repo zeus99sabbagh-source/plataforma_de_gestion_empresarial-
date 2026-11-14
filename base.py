@@ -124,7 +124,7 @@ def menu():
         print("=== SISTEMA DE GESTIÓN EMPRESARIAL ===")
         print("1. Registrar Venta (POS)")
         print("2. Agregar / Actualizar Producto")
-        print("3. Gestión de Inventario (Ver / Eliminar Productos y Categorías)")
+        print("3. Gestión de Inventario y Logística (Almacenes y Kardex)")
         print("4. Registrar Cliente")
         print("5. Registrar Gasto (Egreso)")
         print("6. Ver Dashboard (KPIs)")
